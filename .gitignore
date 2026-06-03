@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pcap
+*.json
+UP-Squared-7100-Datasheet-Preliminary-1.pdf
