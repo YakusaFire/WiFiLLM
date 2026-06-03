@@ -12,27 +12,27 @@ CATEGORIES_SUSPECTES = {
     "evil_twin", "anomaly"
 }
 
-SYSTEM_PROMPT = """Tu es un analyseur de sécurité WiFi terrain embarqué. Une trame a passé un filtre automatique. Détermine si elle mérite d'être conservée et à quel niveau de menace.
+SYSTEM_PROMPT = """Tu es un capteur WiFi tactique embarqué. Tu reçois le résumé comportemental d'un appareil observé en 30 secondes. Ta mission : déterminer si cet appareil est potentiellement hostile, opérationnel (militaire, renseignement, attaquant) ou simplement civil banal.
 
-CATÉGORIES ET RÈGLES interesting :
-- deauth_attack : interesting=true (attaque possible, même isolée)
-- handshake : interesting=true (capture d'authentification WPA)
-- over_secured : interesting=true si score élevé (WPA3+PMF+SSID masqué combinés)
-- evil_twin / covert_ap / surveillance / anomaly : interesting=true
-- probe_tracking : interesting=true UNIQUEMENT si le probe est CIBLÉ (SSID précis indiquant un réseau connu de l'appareil). Un wildcard probe (sans SSID) ou un probe avec MAC randomisé vers un réseau banal = interesting=false, catégorie=normal
-- normal : interesting=false
+RÈGLE PRINCIPALE : interesting=true signifie "valeur de renseignement ou menace réelle". Sois strict — un faux positif est aussi coûteux qu'un faux négatif.
 
-CONTEXTE — profil de sécurité WiFi :
-Réseau civil ordinaire : WPA2-PSK, CCMP-128, SSID visible, PMF optionnel.
-Réseau suspect : WPA3-SAE + PMF obligatoire + SSID masqué + GCMP-256 combinés.
+CRITÈRES D'UN APPAREIL HOSTILE OU OPÉRATIONNEL :
+- Deauthentification(s) : brouillage actif, attaque de déconnexion → deauth_attack
+- Handshake WPA capturé (EAPOL) : quelqu'un intercepte les credentials → handshake
+- MAC PERMANENT qui sonde plusieurs réseaux : équipement identifiable en reconnaissance → surveillance
+- MAC PERMANENT qui cherche un réseau précis : appareil traçable avec historique réseau → probe_tracking
+- Beacon avec WPA3+PMF+SSID masqué combinés : réseau opérationnel, pas civil → over_secured
+- AP imitant un réseau connu (même SSID, BSSID différent) → evil_twin
 
-POUR LES PROBE REQUESTS — distingue précisément :
-- MAC permanent + SSID précis : probablement un appareil identifiable qui cherche un réseau connu → probe_tracking, interesting=true
-- MAC randomisé + SSID précis : appareil cherche un réseau connu mais se cache → probe_tracking, interesting=true, threat_level=low
-- MAC randomisé + wildcard (sans SSID) : comportement normal de protection vie privée → normal, interesting=false
-- Rafale de probes vers des dizaines de SSID différents : balayage actif → surveillance, interesting=true
+COMPORTEMENTS CIVILS BANALS (interesting=false, catégorie=normal) :
+- Probes wildcard ou ciblés depuis MAC randomisé : iOS/Android/Windows en protection vie privée
+- Beacons WPA2-PSK avec SSID visible : box internet standard
+- Authentifications isolées sur réseaux connus
 
-Réponds uniquement en JSON : {"interesting": true/false, "threat_level": "none|low|medium|high", "category": "normal|handshake|deauth_attack|probe_tracking|evil_twin|covert_ap|surveillance|over_secured|anomaly", "reason": "une phrase précise"}"""
+threat_level doit être : "none", "low", "medium", ou "high". Ne jamais utiliser "normal".
+
+Réponds UNIQUEMENT en JSON valide :
+{"interesting": true/false, "threat_level": "none|low|medium|high", "category": "normal|handshake|deauth_attack|probe_tracking|evil_twin|covert_ap|surveillance|over_secured|anomaly", "reason": "une phrase factuelle et précise"}"""
 
 def analyser(description: str) -> dict:
     payload = {
@@ -52,12 +52,19 @@ def analyser(description: str) -> dict:
         result = json.loads(r.json()["response"])
         # Force interesting=True pour les catégories graves (sauf probe_tracking jugé sans menace)
         cat = result.get("category")
+        # Normalise threat_level : le LLM retourne parfois "normal" au lieu de "none"
         level = result.get("threat_level", "none")
+        if level not in ("none", "low", "medium", "high"):
+            level = "none"
+            result["threat_level"] = "none"
+        # Force interesting selon catégorie et niveau
         if cat in CATEGORIES_SUSPECTES:
             if cat == "probe_tracking" and level == "none":
                 result["interesting"] = False
             else:
                 result["interesting"] = True
+        else:
+            result["interesting"] = False
         return result
     except requests.exceptions.Timeout:
         return {"interesting": False, "threat_level": "none", "category": "normal", "reason": "timeout LLM"}
