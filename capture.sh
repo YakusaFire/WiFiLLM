@@ -1,4 +1,23 @@
 #!/bin/bash
+# =============================================================================
+#  capture.sh — Capture brute 802.11 avec channel hopping et rotation pcap
+# =============================================================================
+#  Rôle       : Lance deux processus en parallèle :
+#               1. Channel hopping — bascule l'interface sur tous les canaux
+#                  2.4 GHz (1-11) puis 5 GHz (36-140 DFS inclus) toutes les
+#                  300 ms, pour couvrir l'ensemble du spectre.
+#               2. tcpdump — capture les trames management (type mgt) et data
+#                  (type data) en rotation toutes les 30 s dans des fichiers
+#                  horodatés raw_YYYYMMDD_HHMMSS.pcap.
+#
+#  Entrées    : Interface WiFi en mode monitor (configurée par capteur.sh)
+#  Sorties    : /data/capture/raw/raw_YYYYMMDD_HHMMSS.pcap
+#               Format : IEEE802_11_RADIO (radiotap + 802.11), compatible Wireshark
+#
+#  Dépend de  : tcpdump, iw
+#  Lancé par  : capteur.sh start (via nohup en arrière-plan)
+#  Log        : /var/log/capture.log
+# =============================================================================
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
 IFACE="wlx64d95401ebeb"

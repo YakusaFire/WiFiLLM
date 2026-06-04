@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+# =============================================================================
+#  extractor.py — Extraction des trames retenues dans un pcap dédié + JSON
+# =============================================================================
+#  Rôle       : Pour chaque pcap contenant au moins une trame intéressante,
+#               extrait exactement les trames concernées (par numéro de frame)
+#               dans un nouveau fichier pcap via un filtre tshark, et génère
+#               un fichier JSON d'analyse à côté.
+#               Tolère le code de retour 2 de tshark (pcap tronqué en capture
+#               live — les trames lues avant la coupure restent valides).
+#
+#  Entrée     : source_pcap (str) — chemin du pcap source
+#               trames (list)     — liste de dicts {numero, description, layers,
+#                                   analyse} produits par pipeline.py
+#  Sortie     : /data/capture/interesting/<nom>_<timestamp>.pcap
+#               /data/capture/interesting/<nom>_<timestamp>_analyse.json
+#               Retourne le chemin du pcap créé, ou None en cas d'échec.
+#
+#  Dépend de  : tshark (subprocess)
+#  Appelé par : pipeline.py
+# =============================================================================
 
 import subprocess
 import os

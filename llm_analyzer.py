@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+# =============================================================================
+#  llm_analyzer.py — Analyse comportementale par LLM local (Ollama)
+# =============================================================================
+#  Rôle       : Soumet la description comportementale agrégée d'un appareil à
+#               Ollama (qwen2.5:3b, localhost:11434) et parse la réponse JSON.
+#               N'est appelé que pour les cas AMBIGUS non résolus par aggregateur.py.
+#               Le prompt système positionne le LLM comme capteur tactique et lui
+#               impose une réponse JSON stricte : interesting, threat_level,
+#               category, reason.
+#               Post-traitement : force interesting=True pour les catégories graves,
+#               normalise threat_level si le LLM dévie du format attendu, retourne
+#               interesting=False en cas de timeout (> 45 s) ou d'erreur réseau.
+#
+#  Entrée     : description (str) — texte comportemental produit par aggregateur.py
+#  Sortie     : dict {interesting, threat_level, category, reason}
+#
+#  Dépend de  : Ollama tournant sur localhost:11434 avec le modèle qwen2.5:3b
+#  Appelé par : pipeline.py
+# =============================================================================
 
 import requests
 import json

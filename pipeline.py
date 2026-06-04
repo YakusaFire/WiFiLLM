@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+# =============================================================================
+#  pipeline.py — Orchestrateur principal de la chaîne d'analyse WiFi
+# =============================================================================
+#  Rôle       : Surveille /data/capture/raw/ en boucle (toutes les 5 s) et
+#               traite chaque nouveau pcap en enchaînant quatre étapes :
+#                 1. prefilter   — extraction des trames suspectes (sans LLM)
+#                 2. aggregateur — regroupement par MAC + classification auto
+#                 3. llm_analyzer — analyse LLM pour les cas ambigus seulement
+#                 4. extractor   — export du pcap filtré + JSON dans interesting/
+#               Un Traqueur partagé maintient la mémoire inter-pcap des appareils.
+#               Les pcap traités sont déplacés dans /data/capture/done/.
+#
+#  Entrées    : /data/capture/raw/*.pcap  (produits par capture.sh)
+#  Sorties    : /data/capture/interesting/*.pcap + *_analyse.json
+#               /data/capture/done/*.pcap (archives)
+#
+#  Dépend de  : prefilter.py, aggregateur.py, llm_analyzer.py, extractor.py,
+#               traqueur.py, tshark, Ollama (localhost:11434)
+#  Lancé par  : capteur.sh start (via nohup en arrière-plan)
+#  Log        : /var/log/capteur.log
+# =============================================================================
 
 import os
 import glob

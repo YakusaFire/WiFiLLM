@@ -1,4 +1,24 @@
 #!/usr/bin/env python3
+# =============================================================================
+#  traqueur.py — Mémoire inter-pcap des appareils observés
+# =============================================================================
+#  Rôle       : Maintient un historique en RAM de chaque MAC observé entre les
+#               fenêtres de capture successives (30 s chacune). Permet de
+#               distinguer un passant banal (vu une seule fois) d'un appareil
+#               qui stationne ou effectue une reconnaissance active sur la durée.
+#               Trois niveaux de suspicion :
+#               - "ignorer"    : première apparition ou comportement normal
+#               - "surveiller" : vu >= 2 fois, à garder en œil sans escalade
+#               - "llm"        : vu >= 4 fois (persistance) OU >= 5 SSID distincts
+#                                (cartographie WiFi active) → contexte ajouté au LLM
+#               Les entrées inactives depuis > 10 min sont purgées automatiquement.
+#
+#  Entrée     : appels à voir(mac, ssids, signals) depuis aggregateur.py
+#  Sortie     : evaluer(mac) → {niveau, raison}
+#               contexte_llm(mac) → phrase d'historique à injecter dans le prompt
+#
+#  Appelé par : aggregateur.py  (via pipeline.py qui instancie le Traqueur)
+# =============================================================================
 
 import time
 from collections import defaultdict

@@ -1,4 +1,23 @@
 #!/usr/bin/env python3
+# =============================================================================
+#  prefilter.py — Filtre déterministe des trames 802.11 (sans LLM)
+# =============================================================================
+#  Rôle       : Lit un pcap via tshark et en extrait uniquement les trames
+#               présentant un intérêt opérationnel :
+#               - Probe Request / Association / Authentication / Deauth / Disassoc
+#               - EAPOL (handshake WPA2 4-way)
+#               - Beacons dont le score de sur-sécurisation atteint >= 3 points
+#                 (WPA3, PMF, GCMP-256, SSID masqué, signal anormal…)
+#               Pour chaque trame retenue, construit une description textuelle
+#               enrichie (SSID décodé, MAC randomisé/permanent, type d'échange)
+#               destinée à aggregateur.py puis au LLM.
+#
+#  Entrée     : chemin vers un fichier .pcap
+#  Sortie     : liste de dicts {numero, description, layers}
+#
+#  Dépend de  : tshark (subprocess)
+#  Appelé par : pipeline.py
+# =============================================================================
 
 import subprocess
 import json

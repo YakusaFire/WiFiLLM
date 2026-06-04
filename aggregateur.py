@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+# =============================================================================
+#  aggregateur.py — Agrégation comportementale par MAC + classification auto
+# =============================================================================
+#  Rôle       : Regroupe les candidats (issus de prefilter.py) par adresse MAC
+#               source, puis tente de classer chaque appareil sans appeler le LLM.
+#               Les cas évidents sont résolus immédiatement (règles déterministes) :
+#               - Wildcard probes depuis MAC randomisé → ignoré (vie privée civile)
+#               - Deauth broadcast ou >= 3 deauth ciblées  → deauth_attack
+#               - >= 2 trames EAPOL                        → handshake
+#               - MAC permanent sondant >= 5 SSID          → surveillance
+#               Pour les cas ambigus, une description comportementale synthétique
+#               (types de trames, SSIDs sondés, signal, historique traqueur) est
+#               construite et renvoyée pour soumission au LLM.
+#               Le Traqueur peut escalader un MAC randomisé persistant au LLM.
+#
+#  Entrée     : liste de candidats {numero, description, layers}  +  Traqueur
+#  Sortie     : liste d'agrégats {mac, description, frames, auto_class}
+#               auto_class = dict analyse si classifié, None si LLM requis
+#
+#  Dépend de  : traqueur.py
+#  Appelé par : pipeline.py
+# =============================================================================
 
 from collections import defaultdict
 from traqueur import Traqueur

@@ -1,16 +1,23 @@
 #!/bin/bash
+# =============================================================================
+#  capteur.sh — Point d'entrée unique pour opérer le capteur WiFi LLM
+# =============================================================================
+#  Rôle       : Contrôle l'ensemble du système (capture + pipeline). Passe
+#               l'interface WiFi en mode monitor, crée les dossiers de travail,
+#               lance ou arrête les deux processus, et expose un état synthétique.
 #
-# capteur.sh — Contrôle du capteur WiFi LLM
+#  Usage      : bash /root/capteur.sh <commande>
+#  Commandes  :
+#    start    — Mode monitor + création des dossiers + lancement capture & pipeline
+#    stop     — Arrête proprement capture.sh, pipeline.py et tcpdump
+#    restart  — Enchaîne stop puis start
+#    status   — État des processus, mode de l'interface, compteurs de fichiers
+#    logs     — 20 dernières lignes du log pipeline (/var/log/capteur.log)
 #
-# Usage : bash /root/capteur.sh <commande>
-#
-# Commandes disponibles :
-#   start    — Passe l'interface en mode monitor, lance la capture et la pipeline
-#   stop     — Arrête la capture, la pipeline et tcpdump
-#   restart  — Arrête puis redémarre tout
-#   status   — Affiche l'état des processus et les stats des fichiers capturés
-#   logs     — Affiche les 20 dernières lignes du log de la pipeline
-#
+#  Dépend de  : capture.sh, pipeline.py (dans /root/)
+#               iw, ip (configuration interface), nohup
+#  Logs       : /var/log/capture.log (capture), /var/log/capteur.log (pipeline)
+# =============================================================================
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin:$PATH
 
 IFACE="wlx64d95401ebeb"

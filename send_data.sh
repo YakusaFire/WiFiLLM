@@ -1,4 +1,29 @@
 #!/bin/bash
+# =============================================================================
+#  send_data.sh — Exfiltration des pcap suspects via modem 4G
+# =============================================================================
+#  Rôle       : Transfère les fichiers .pcap présents dans /data/capture/interesting/
+#               vers un serveur distant lorsque le réseau Tailscale n'est pas
+#               disponible (terrain, zone sans WiFi admin).
+#               Séquence : vérification des fichiers → activation du modem 4G
+#               (ModemManager / mmcli) → connexion APN → rsync avec suppression
+#               de la source après envoi réussi → désactivation du modem.
+#               Abandonne proprement si aucun fichier n'est en attente.
+#
+#  Entrée     : /data/capture/interesting/*.pcap
+#  Sortie     : fichiers transférés sur REMOTE_HOST:REMOTE_PATH (via rsync+SSH)
+#               fichiers locaux supprimés après envoi réussi
+#
+#  Variables à configurer :
+#    MODEM_APN    — APN de l'opérateur (ex: "free", "orange")
+#    MODEM_IFACE  — interface réseau du modem (ex: "wwan0")
+#    REMOTE_USER  — utilisateur SSH du serveur de réception
+#    REMOTE_HOST  — adresse du serveur de réception
+#    REMOTE_PATH  — chemin de destination sur le serveur
+#
+#  Dépend de  : mmcli (ModemManager), rsync, ip
+#  Usage      : bash /root/send_data.sh  (manuel ou cron)
+# =============================================================================
 
 MODEM_APN="free"
 MODEM_IFACE="wwan0"
