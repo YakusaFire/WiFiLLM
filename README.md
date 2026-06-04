@@ -65,6 +65,7 @@ Antenne WiFi (mode monitor)
 | `prefilter.py` | Filtre déterministe — extrait et décrit les trames suspectes |
 | `aggregateur.py` | Agrégation par MAC + classification automatique sans LLM |
 | `traqueur.py` | Traqueur inter-pcap — historique de persistance des appareils |
+| `oui.py` | Résolution OUI → fabricant (base `manuf` de Wireshark) + mode calibration/terrain |
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
 | `send_data.sh` | Exfiltration des pcap suspects vers un serveur distant via modem 4G |
@@ -224,6 +225,22 @@ Le contexte historique ajouté à la description LLM précise le nombre d'appari
 
 ---
 
+### `oui.py` — Résolution fabricant (OUI)
+
+Donne le **fabricant** d'une MAC à partir de son **OUI** (les 3 premiers octets, attribués par l'IEEE), par lookup déterministe contre la base `manuf` de Wireshark — **jamais** via le LLM (qui hallucinerait les marques). `aggregateur.py` injecte ce fabricant dans la description envoyée au LLM.
+
+- Ne résout que les **MAC permanentes** : une MAC randomisée (bit `0x02`) a un OUI bidon → retourne `None`.
+- **Mode d'emploi** (variable d'env `CAPTEUR_MODE`, défaut `calibration`) :
+
+| Mode | Matériel maison (`FABRICANTS_SITE` : GL.iNet, Sagemcom…) |
+|---|---|
+| `calibration` | Atelier/bureau → **bénin** : `[équipement habituel du site]` (évite les faux positifs sur sa propre flotte) |
+| `terrain` | Capteur déposé en zone, passif → **suspect** : `[matériel … suspect en zone opérationnelle]` (matériel adverse probable) |
+
+> Dans les deux modes, un `deauth`/`handshake` émis par ces équipements reste détecté par les règles déterministes — le mode ne joue que sur le jugement « mou » du LLM. Pour déployer en zone : `CAPTEUR_MODE=terrain`.
+
+---
+
 ### `llm_analyzer.py` — Analyse par LLM
 
 Envoie la description comportementale agrégée d'un appareil à Ollama (`qwen2.5:3b` sur `localhost:11434`) et parse la réponse JSON. N'est appelé que pour les cas **non résolus par la classification automatique** de `aggregateur.py`.
@@ -318,6 +335,7 @@ Exemple de log pipeline :
 ├── prefilter.py      ← filtre déterministe
 ├── aggregateur.py    ← agrégation comportementale par MAC
 ├── traqueur.py       ← mémoire inter-pcap des appareils
+├── oui.py            ← résolution OUI → fabricant + mode calibration/terrain
 ├── llm_analyzer.py   ← interface LLM
 ├── extractor.py      ← extraction des résultats
 └── send_data.sh      ← exfiltration 4G (optionnel)

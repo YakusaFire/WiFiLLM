@@ -51,6 +51,14 @@ CRITÈRES D'UN APPAREIL HOSTILE OU OPÉRATIONNEL :
 - Beacon avec WPA3+PMF+SSID masqué combinés : réseau opérationnel, pas civil → over_secured
 - AP imitant un réseau connu (même SSID, BSSID différent) → evil_twin
 
+INDICE FABRICANT (champ "fabricant", issu de l'OUI) — le COMPORTEMENT prime sur la marque :
+- "[équipement habituel du site]" → infrastructure connue et ATTENDUE → ne PAS traiter comme une menace sur le seul critère de la marque (un éventuel deauth/handshake reste signalé par les règles).
+- "[matériel type routeur portable — suspect en zone opérationnelle]" → matériel adverse probable (capteur déposé en zone) → suspect, threat_level au moins medium.
+- Module IoT (Espressif/ESP) qui DEAUTH ou SONDE → souvent un outil d'attaque bon marché (ex. deauther ESP8266) → suspect.
+- Adaptateur WiFi générique en sondage actif → reconnaissance possible.
+- Smartphone/ordinateur grand public (Apple, Samsung, Intel…) avec probes banales → civil.
+- Pas de fabricant = MAC randomisée = protection vie privée standard → banal.
+
 COMPORTEMENTS CIVILS BANALS (interesting=false, catégorie=normal) :
 - Probes wildcard ou ciblés depuis MAC randomisé : iOS/Android/Windows en protection vie privée
 - Beacons WPA2-PSK avec SSID visible : box internet standard

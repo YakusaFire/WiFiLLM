@@ -24,6 +24,7 @@
 
 from collections import defaultdict
 from traqueur import Traqueur
+from oui import fabricant, infra_connue, materiel_suspect_zone
 
 def _mac_est_randomise(mac: str) -> bool:
     try:
@@ -134,7 +135,17 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
 
         # --- Description comportementale ---
         mac_label = f"{'MAC randomisé' if mac_randomise else 'MAC PERMANENT'}"
-        parties = [f"Appareil {mac} ({mac_label}) — {len(frames)} trame(s) en 30s"]
+        # Fabricant via OUI (3 premiers octets) — uniquement pour les MAC permanentes.
+        fab = fabricant(mac)
+        if not fab:
+            fab_txt = ""
+        elif infra_connue(mac):
+            fab_txt = f", fabricant: {fab} [équipement habituel du site]"
+        elif materiel_suspect_zone(mac):
+            fab_txt = f", fabricant: {fab} [matériel type routeur portable — suspect en zone opérationnelle]"
+        else:
+            fab_txt = f", fabricant: {fab}"
+        parties = [f"Appareil {mac} ({mac_label}{fab_txt}) — {len(frames)} trame(s) en 30s"]
 
         if n_deauth:
             broadcast = "ff:ff:ff:ff:ff:ff" in bssids_deauth
