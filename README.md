@@ -68,6 +68,8 @@ Antenne WiFi (mode monitor)
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
 | `send_data.sh` | Exfiltration des pcap suspects vers un serveur distant via modem 4G |
+| `mesure_plus_value.py` | Outil de mesure : quantifie le split règle/LLM et la plus-value du LLM sur pcap réels ou corpus démo |
+| `rapport/` | Rapports de tests et de mesure de plus-value (v1 = constat faux positifs, v2 = après correctif) |
 
 ---
 
@@ -242,10 +244,14 @@ Envoie la description comportementale agrégée d'un appareil à Ollama (`qwen2.
 
 **Logique `interesting` après réponse du LLM :**
 
-- Catégories `deauth_attack`, `handshake`, `over_secured`, `evil_twin`, `covert_ap`, `surveillance`, `anomaly` → `interesting` forcé à `true`
-- `probe_tracking` avec `threat_level=none` → `interesting` forcé à `false` (wildcard probe depuis MAC randomisé = bruit normal)
-- `probe_tracking` avec `threat_level` ≥ `low` → `interesting=true` (probe ciblé depuis MAC permanent)
+Le `threat_level` jugé par le LLM est la **source de vérité**, pas la seule catégorie.
+
+- Catégories d'attaque **dures** (`CATEGORIES_GRAVES` = `deauth_attack`, `handshake`, `evil_twin`, `covert_ap`) → `interesting=true` (filet de sécurité ; `threat_level` remonté à `medium` s'il valait `none`)
+- Catégories **molles** (`probe_tracking`, `surveillance`, `over_secured`, `anomaly`) → `interesting=true` **uniquement si** `threat_level` ∈ {`medium`, `high`} ; sinon `false`
+- `normal` ou catégorie inconnue → `interesting=false`
 - En cas de timeout (> 45 s) ou d'erreur → `interesting=false`
+
+> **Pourquoi cette logique** : forcer `interesting=true` sur la seule catégorie générait un fort taux de faux positifs sur le terrain — `qwen2.5:3b` sur-attribue `anomaly` à des MAC randomisés civils tout en les décrivant comme bénins. Faire piloter `interesting` par le `threat_level` corrige ça (cf. `rapport/rapport_plus_value_v1.md` → `v2.md`).
 
 ---
 
