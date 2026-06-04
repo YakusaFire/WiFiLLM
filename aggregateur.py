@@ -25,6 +25,7 @@
 from collections import defaultdict
 from traqueur import Traqueur
 from oui import fabricant, infra_connue, materiel_suspect_zone
+from prefilter import score_securite_beacon
 
 def _mac_est_randomise(mac: str) -> bool:
     try:
@@ -113,6 +114,18 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
         n_auth      = subtypes.count("0x000b")
         n_assoc     = subtypes.count("0x0000") + subtypes.count("0x0001")
         n_eapol     = sum(1 for f in frames if "eapol.type" in f["layers"])
+        n_beacon    = subtypes.count("0x0008")
+
+        # Profil de sécurité du beacon le plus "sur-sécurisé" (réutilise prefilter).
+        # Sans ça, un AP furtif/over-secured arrivait au LLM sans aucun indice.
+        beacon_score, beacon_indices, beacon_masque = 0, [], False
+        for f in frames:
+            if f["layers"].get("wlan.fc.type_subtype", [""])[0] == "0x0008":
+                sc, ind = score_securite_beacon(f["layers"])
+                if sc >= beacon_score:
+                    beacon_score, beacon_indices = sc, ind
+                if f["layers"].get("wlan.ssid", [""])[0] in ("", "<MISSING>"):
+                    beacon_masque = True
 
         ssids = set()
         for f in frames:
@@ -165,6 +178,15 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
             parties.append(f"{n_auth} Authentication(s) 802.11")
         if n_assoc:
             parties.append(f"{n_assoc} Association(s)")
+        if n_beacon:
+            nom_ssid = "SSID MASQUÉ" if beacon_masque else (list(ssids)[0] if ssids else "SSID inconnu")
+            if beacon_indices:
+                parties.append(
+                    f"Beacon AP ({nom_ssid}) — profil de sécurité : {', '.join(beacon_indices)} "
+                    f"(score sur-sécurisation {beacon_score}/12)"
+                )
+            else:
+                parties.append(f"Beacon AP ({nom_ssid})")
         if signals:
             parties.append(f"Signal {min(signals)} à {max(signals)} dBm")
 
@@ -200,6 +222,19 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
                     "category": "normal",
                     "reason": eval_traqueur["raison"],
                 }
+
+        # En mode calibration, le matériel d'infrastructure connu du site
+        # (FABRICANTS_SITE via oui.py) est traité comme bénin de façon
+        # DÉTERMINISTE — SAUF attaque dure (deauth/handshake), qui reste levée
+        # par les règles. (Le simple indice de prompt ne suffisait pas à brider
+        # le LLM : cf. rapport batterie v1, faux positifs M1/M3.)
+        if infra_connue(mac) and (auto is None or auto.get("category") not in ("deauth_attack", "handshake")):
+            auto = {
+                "interesting": False,
+                "threat_level": "none",
+                "category": "normal",
+                "reason": f"Équipement habituel du site ({fab}) — non hostile en calibration.",
+            }
 
         agregats.append({
             "mac":          mac,

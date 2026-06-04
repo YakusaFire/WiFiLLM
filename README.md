@@ -263,10 +263,10 @@ Envoie la description comportementale agrégée d'un appareil à Ollama (`qwen2.
 
 Le `threat_level` jugé par le LLM est la **source de vérité**, pas la seule catégorie.
 
-- Catégories d'attaque **dures** (`CATEGORIES_GRAVES` = `deauth_attack`, `handshake`, `evil_twin`, `covert_ap`) → `interesting=true` (filet de sécurité ; `threat_level` remonté à `medium` s'il valait `none`)
-- Catégories **molles** (`probe_tracking`, `surveillance`, `over_secured`, `anomaly`) → `interesting=true` **uniquement si** `threat_level` ∈ {`medium`, `high`} ; sinon `false`
+- Catégories d'attaque **dures** (`CATEGORIES_GRAVES` = `deauth_attack`, `handshake`, `evil_twin`, `covert_ap`, `over_secured`) → `interesting=true` (filet de sécurité ; `threat_level` remonté à `medium` s'il valait `none`)
+- Catégories **molles** (`probe_tracking`, `surveillance`, `anomaly`) → `interesting=true` **uniquement si** `threat_level` ∈ {`medium`, `high`} ; sinon `false`
 - `normal` ou catégorie inconnue → `interesting=false`
-- En cas de timeout (> 45 s) ou d'erreur → `interesting=false`
+- En cas de timeout (> 60 s) ou d'erreur → `interesting=false`
 
 > **Pourquoi cette logique** : forcer `interesting=true` sur la seule catégorie générait un fort taux de faux positifs sur le terrain — `qwen2.5:3b` sur-attribue `anomaly` à des MAC randomisés civils tout en les décrivant comme bénins. Faire piloter `interesting` par le `threat_level` corrige ça (cf. `rapport/rapport_plus_value_v1.md` → `v2.md`).
 

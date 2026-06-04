@@ -10,7 +10,7 @@
 #               category, reason.
 #               Post-traitement : force interesting=True pour les catégories graves,
 #               normalise threat_level si le LLM dévie du format attendu, retourne
-#               interesting=False en cas de timeout (> 45 s) ou d'erreur réseau.
+#               interesting=False en cas de timeout (> 60 s) ou d'erreur réseau.
 #
 #  Entrée     : description (str) — texte comportemental produit par aggregateur.py
 #  Sortie     : dict {interesting, threat_level, category, reason}
@@ -37,7 +37,7 @@ CATEGORIES_SUSPECTES = {
 # Les autres catégories ("anomaly", "probe_tracking", "surveillance",
 # "over_secured") sont sur-attribuées par le petit modèle à des appareils
 # civils → on ne les force PAS, on suit le threat_level réel.
-CATEGORIES_GRAVES = {"deauth_attack", "handshake", "evil_twin", "covert_ap"}
+CATEGORIES_GRAVES = {"deauth_attack", "handshake", "evil_twin", "covert_ap", "over_secured"}
 
 SYSTEM_PROMPT = """Tu es un capteur WiFi tactique embarqué. Tu reçois le résumé comportemental d'un appareil observé en 30 secondes. Ta mission : déterminer si cet appareil est potentiellement hostile, opérationnel (militaire, renseignement, attaquant) ou simplement civil banal.
 
@@ -82,7 +82,7 @@ def analyser(description: str) -> dict:
         }
     }
     try:
-        r = requests.post(OLLAMA_URL, json=payload, timeout=45)
+        r = requests.post(OLLAMA_URL, json=payload, timeout=60)
         r.raise_for_status()
         result = json.loads(r.json()["response"])
         cat = result.get("category")
