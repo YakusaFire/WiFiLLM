@@ -31,6 +31,14 @@ CATEGORIES_SUSPECTES = {
     "evil_twin", "anomaly"
 }
 
+# Catégories d'attaque "dures" : nécessitent une preuve technique spécifique
+# (deauth, EAPOL, BSSID usurpé, beacon furtif). qwen2.5:3b ne les attribue
+# quasiment jamais à tort → filet de sécurité : toujours retenues.
+# Les autres catégories ("anomaly", "probe_tracking", "surveillance",
+# "over_secured") sont sur-attribuées par le petit modèle à des appareils
+# civils → on ne les force PAS, on suit le threat_level réel.
+CATEGORIES_GRAVES = {"deauth_attack", "handshake", "evil_twin", "covert_ap"}
+
 SYSTEM_PROMPT = """Tu es un capteur WiFi tactique embarqué. Tu reçois le résumé comportemental d'un appareil observé en 30 secondes. Ta mission : déterminer si cet appareil est potentiellement hostile, opérationnel (militaire, renseignement, attaquant) ou simplement civil banal.
 
 RÈGLE PRINCIPALE : interesting=true signifie "valeur de renseignement ou menace réelle". Sois strict — un faux positif est aussi coûteux qu'un faux négatif.
@@ -69,19 +77,28 @@ def analyser(description: str) -> dict:
         r = requests.post(OLLAMA_URL, json=payload, timeout=45)
         r.raise_for_status()
         result = json.loads(r.json()["response"])
-        # Force interesting=True pour les catégories graves (sauf probe_tracking jugé sans menace)
         cat = result.get("category")
         # Normalise threat_level : le LLM retourne parfois "normal" au lieu de "none"
         level = result.get("threat_level", "none")
         if level not in ("none", "low", "medium", "high"):
             level = "none"
-            result["threat_level"] = "none"
-        # Force interesting selon catégorie et niveau
-        if cat in CATEGORIES_SUSPECTES:
-            if cat == "probe_tracking" and level == "none":
-                result["interesting"] = False
-            else:
-                result["interesting"] = True
+        result["threat_level"] = level
+
+        # interesting suit le NIVEAU DE MENACE réel jugé par le LLM, pas la
+        # seule catégorie : qwen2.5:3b sur-attribue "anomaly"/"probe_tracking"
+        # à des appareils civils (probes wildcard, MAC randomisé) tout en les
+        # décrivant comme bénins ("pas d'activité suspecte"). Forcer
+        # interesting=True sur la catégorie générait un fort taux de faux
+        # positifs sur le terrain (cf. rapport v1).
+        if cat in CATEGORIES_GRAVES:
+            # Filet : une attaque caractérisée est toujours remontée.
+            result["interesting"] = True
+            if level == "none":
+                result["threat_level"] = "medium"
+        elif cat in CATEGORIES_SUSPECTES:
+            # Catégorie "molle" : retenue seulement si le LLM annonce un
+            # niveau de menace effectif (medium/high).
+            result["interesting"] = level in ("medium", "high")
         else:
             result["interesting"] = False
         return result
