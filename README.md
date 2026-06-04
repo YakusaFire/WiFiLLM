@@ -1,6 +1,6 @@
 # Capteur WiFi embarqué avec analyse LLM
 
-Système de capture et d'analyse automatique du trafic WiFi 802.11 en mode passif, déployé sur un Intel UP² 7100. Chaque trame capturée passe par un filtre déterministe puis par un LLM local (Ollama / Qwen2.5 3B) qui décide si elle mérite d'être archivée.
+Système de capture et d'analyse automatique du trafic WiFi 802.11 en mode passif, déployé sur un Intel UP² 7100. Chaque trame capturée passe par un filtre déterministe, une agrégation comportementale par appareil, puis (pour les cas ambigus) par un LLM local (Ollama / Qwen2.5 3B) qui décide si elle mérite d'être archivée.
 
 ---
 
@@ -33,6 +33,11 @@ Antenne WiFi (mode monitor)
         │         │                           sans appel LLM
         │         │  candidats (description texte)
         │         ▼
+        ├─── [aggregateur.py]  ──→ regroupe par MAC source
+        │         │                  classification automatique sans LLM
+        │         │                  (deauth, EAPOL, probe MAC permanent…)
+        │         │  cas ambigus seulement
+        │         ▼
         ├─── [llm_analyzer.py] ──→ Ollama qwen2.5:3b
         │         │                  analyse + classification
         │         │  trames jugées intéressantes
@@ -42,6 +47,10 @@ Antenne WiFi (mode monitor)
         │
         ▼
   pcap traité déplacé vers /data/capture/done/
+
+  [traqueur.py]  (objet partagé dans pipeline.py)
+        └── historique inter-pcap des appareils observés
+              → escalade au LLM si appareil persistant ou en reconnaissance
 ```
 
 ---
@@ -52,10 +61,13 @@ Antenne WiFi (mode monitor)
 |---|---|
 | `capteur.sh` | Script de contrôle : start / stop / restart / status / logs |
 | `capture.sh` | Capture brute 802.11 — mode monitor + channel hopping + tcpdump |
-| `pipeline.py` | Orchestrateur : surveille les pcap et enchaîne les 3 étapes |
+| `pipeline.py` | Orchestrateur : surveille les pcap et enchaîne les étapes |
 | `prefilter.py` | Filtre déterministe — extrait et décrit les trames suspectes |
+| `aggregateur.py` | Agrégation par MAC + classification automatique sans LLM |
+| `traqueur.py` | Traqueur inter-pcap — historique de persistance des appareils |
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
+| `send_data.sh` | Exfiltration des pcap suspects vers un serveur distant via modem 4G |
 
 ---
 
@@ -100,14 +112,23 @@ Format de capture : `IEEE802_11_RADIO` (radiotap header + 802.11) — compatible
 
 ### `pipeline.py` — Orchestrateur
 
-Boucle infinie avec un délai de 5 secondes. À chaque itération, il cherche les fichiers `.pcap` non encore traités dans `/data/capture/raw/`, les traite dans l'ordre chronologique, puis déplace chaque fichier dans `/data/capture/done/` une fois terminé.
+Boucle infinie avec un délai de 5 secondes. Un `Traqueur` est instancié au démarrage et partagé sur toute la durée de vie du processus pour la mémoire inter-pcap.
+
+À chaque itération, il cherche les fichiers `.pcap` non encore traités dans `/data/capture/raw/`, les traite dans l'ordre chronologique, puis déplace chaque fichier dans `/data/capture/done/` une fois terminé.
 
 Pour chaque fichier :
 ```
 filtrer_pcap(pcap) → liste de candidats
     si vide → "Aucun candidat", déplace le fichier
-    sinon → pour chaque candidat : analyser(description) → LLM
-        si interesting=true → ajouter à la liste des intéressants
+    sinon → agreger(candidats, traqueur) → liste d'agrégats par MAC
+
+    pour chaque agrégat :
+        si classification automatique disponible :
+            → log + ajout direct si interesting=true
+        sinon (cas ambigu) :
+            → analyser(description) → LLM
+            → ajout si interesting=true
+
     si intéressants > 0 → extraire(pcap, intéressants) → pcap + json dans interesting/
 ```
 
@@ -117,7 +138,7 @@ Logs dans `/var/log/capteur.log`.
 
 ### `prefilter.py` — Filtre déterministe
 
-Lit le pcap avec `tshark -T json -e field...` et inspecte chaque trame **sans appel réseau**. Son rôle est d'éliminer la majorité du trafic banal (beacons WPA2 standard, trames data chiffrées banales) avant d'interroger le LLM, qui est lent (~30 s/appel).
+Lit le pcap avec `tshark -T json -e field...` et inspecte chaque trame **sans appel réseau**. Son rôle est d'éliminer la majorité du trafic banal (beacons WPA2 standard, trames data chiffrées banales) avant l'agrégation et l'éventuel appel LLM.
 
 **Trames systématiquement retenues :**
 
@@ -155,9 +176,55 @@ Un réseau domestique WPA2-PSK standard ne dépasse jamais 1–2 points. Un rés
 
 ---
 
+### `aggregateur.py` — Agrégation comportementale par MAC
+
+Regroupe tous les candidats d'un pcap par **adresse MAC source**, construit une description comportementale synthétique, puis tente une **classification automatique sans appel LLM** pour les cas évidents.
+
+**Cas classifiés automatiquement :**
+
+| Condition | Catégorie | Niveau |
+|---|---|---|
+| Wildcard probes ou probes ciblés depuis MAC randomisé, sans deauth ni EAPOL | `normal` | none — ignoré |
+| Deauth broadcast (`ff:ff:ff:ff:ff:ff`) | `deauth_attack` | medium / high (≥ 5 deauth) |
+| ≥ 3 deauthentifications ciblées | `deauth_attack` | medium |
+| ≥ 2 trames EAPOL | `handshake` | medium |
+| MAC permanent sondant ≥ 5 SSID distincts | `surveillance` | medium |
+
+Les cas non couverts par ces règles sont transmis au LLM avec la description comportementale complète (nombre de trames, types, SSIDs sondés, signal min/max, historique traqueur).
+
+**Interaction avec le traqueur :**
+
+Si un appareil à MAC randomisé serait normalement ignoré mais que le `Traqueur` le juge persistant ou en reconnaissance active, son cas est **escaladé au LLM** avec le contexte historique ajouté à la description.
+
+---
+
+### `traqueur.py` — Mémoire inter-pcap
+
+Maintient l'historique de chaque appareil observé **entre les pcap successifs**, permettant de distinguer un passant (vu 1 fois) d'un appareil qui stationne ou fait de la reconnaissance.
+
+**Niveaux d'évaluation :**
+
+| Niveau | Condition | Action |
+|---|---|---|
+| `ignorer` | Première apparition ou comportement banal | Pas d'escalade |
+| `surveiller` | Vu ≥ 2 fois | Pas d'escalade mais suivi actif |
+| `llm` | Vu ≥ 4 fois (persistance) **ou** ≥ 5 SSID distincts (reconnaissance) | Escalade au LLM |
+
+**Paramètres :**
+
+| Paramètre | Valeur | Rôle |
+|---|---|---|
+| `SEUIL_PERSISTANCE` | 4 apparitions | Seuil d'escalade pour un appareil stationnaire |
+| `SEUIL_SSID_DIVERSITE` | 5 SSID distincts | Seuil de détection de cartographie WiFi active |
+| `FENETRE_OUBLI` | 600 s (10 min) | Durée sans activité avant suppression de l'historique |
+
+Le contexte historique ajouté à la description LLM précise le nombre d'apparitions, la durée de présence, et les SSIDs cumulés.
+
+---
+
 ### `llm_analyzer.py` — Analyse par LLM
 
-Envoie la description texte d'une trame à Ollama (`qwen2.5:3b` sur `localhost:11434`) et parse la réponse JSON.
+Envoie la description comportementale agrégée d'un appareil à Ollama (`qwen2.5:3b` sur `localhost:11434`) et parse la réponse JSON. N'est appelé que pour les cas **non résolus par la classification automatique** de `aggregateur.py`.
 
 **Catégories de sortie :**
 
@@ -184,7 +251,7 @@ Envoie la description texte d'une trame à Ollama (`qwen2.5:3b` sur `localhost:1
 
 ### `extractor.py` — Extraction des trames retenues
 
-Pour chaque fichier pcap contenant au moins une trame intéressante, extrait exactement les trames concernées (par numéro de frame) dans un nouveau pcap, et génère un fichier JSON d'analyse à côté.
+Pour chaque fichier pcap contenant au moins une trame intéressante, extrait exactement les trames concernées (par numéro de frame) dans un nouveau pcap, et génère un fichier JSON d'analyse à côté. Tolère le code de retour 2 de tshark (pcap tronqué en capture live — les trames lues restent valides).
 
 ```
 /data/capture/interesting/
@@ -193,6 +260,20 @@ Pour chaque fichier pcap contenant au moins une trame intéressante, extrait exa
 ```
 
 Le JSON contient pour chaque trame : le numéro, la description textuelle, les métadonnées brutes (layers tshark) et la réponse complète du LLM (`interesting`, `threat_level`, `category`, `reason`).
+
+---
+
+### `send_data.sh` — Exfiltration via modem 4G
+
+Script déclenché manuellement (ou par cron) pour exfiltrer les pcap suspects vers un serveur distant lorsque le réseau Tailscale n'est pas disponible.
+
+Fonctionnement :
+1. Vérifie qu'il y a des fichiers `.pcap` dans `/data/capture/interesting/`
+2. Active le modem 4G via `ModemManager` (`mmcli`) sur l'APN configuré
+3. Transfère les fichiers avec `rsync` (suppression source après envoi réussi)
+4. Désactive le modem pour économiser la batterie
+
+Variables à configurer en tête de script : `MODEM_APN`, `REMOTE_USER`, `REMOTE_HOST`, `REMOTE_PATH`.
 
 ---
 
@@ -208,12 +289,14 @@ Exemple de log pipeline :
 ```
 13:00:00 Pipeline démarré
 13:00:05 → raw_20260603_130000.pcap
-13:00:05   12 candidat(s) → LLM
-13:00:38   ✓ [low] probe_tracking — Appareil avec MAC permanent cherchant un réseau connu.
-13:00:38   Aucune trame intéressante
+13:00:05   12 trame(s) → 4 appareil(s)
+13:00:05   ✗ ignoré (da:4f:...) — Probes depuis MAC randomisé — protection vie privée standard
+13:00:05   ⚡ [medium] handshake — Handshake WPA complet capturé (4 trames EAPOL)
+13:00:38   ✓ [low] probe_tracking (c4:a5:...) — Appareil avec MAC permanent cherchant un réseau connu.
+13:00:38   Extrait → raw_20260603_130000_20260603_130038.pcap
 13:00:38 → raw_20260603_130030.pcap
-13:00:38   3 candidat(s) → LLM
-13:01:10   ✓ [high] deauth_attack — Déauthentification broadcast depuis une adresse inconnue.
+13:00:38   3 trame(s) → 1 appareil(s)
+13:01:10   ⚡ [high] deauth_attack — 7 deauthentification(s) broadcast en 30s
 13:01:10   Extrait → raw_20260603_130030_20260603_130110.pcap
 ```
 
@@ -227,8 +310,11 @@ Exemple de log pipeline :
 ├── capture.sh        ← capture brute
 ├── pipeline.py       ← orchestrateur
 ├── prefilter.py      ← filtre déterministe
+├── aggregateur.py    ← agrégation comportementale par MAC
+├── traqueur.py       ← mémoire inter-pcap des appareils
 ├── llm_analyzer.py   ← interface LLM
-└── extractor.py      ← extraction des résultats
+├── extractor.py      ← extraction des résultats
+└── send_data.sh      ← exfiltration 4G (optionnel)
 
 /data/capture/
 ├── raw/              ← pcap en cours de traitement (rotation 30 s)
@@ -254,6 +340,8 @@ echo "8188eu" >> /etc/modules
 echo "blacklist r8188eu" > /etc/modprobe.d/blacklist-r8188eu.conf
 # LLM local :
 # Installer Ollama puis : ollama pull qwen2.5:3b
+# Exfiltration 4G (optionnel) :
+apt install modemmanager
 ```
 
 ---

@@ -19,11 +19,13 @@ def extraire(source_pcap: str, trames: list) -> str:
     out_pcap = os.path.join(OUTPUT_DIR, f"{nom_base}_{timestamp}.pcap")
     out_json = out_pcap.replace(".pcap", "_analyse.json")
 
-    subprocess.run(
+    r = subprocess.run(
         ["tshark", "-r", source_pcap, "-Y", filtre, "-w", out_pcap],
-        check=True,
         capture_output=True
     )
+    # Code 2 = pcap tronqué en capture live — acceptable, les trames lues sont valides
+    if r.returncode not in (0, 2) or not os.path.exists(out_pcap):
+        return None
 
     with open(out_json, "w") as f:
         json.dump(trames, f, indent=2, ensure_ascii=False)
