@@ -65,8 +65,8 @@ Antenne WiFi (mode monitor)
 
 | Fichier | Rôle |
 |---|---|
-| `capteur.sh` | Script de contrôle : start / stop / restart / status / logs |
-| `capture.sh` | Capture brute 802.11 — mode monitor + channel hopping + tcpdump |
+| `scripts/capteur.sh` | Script de contrôle : start / stop / restart / status / logs |
+| `scripts/capture.sh` | Capture brute 802.11 — mode monitor + channel hopping + tcpdump |
 | `pipeline.py` | Orchestrateur : surveille les pcap et enchaîne les étapes |
 | `prefilter.py` | Filtre déterministe — extrait et décrit les trames suspectes |
 | `aggregateur.py` | Agrégation par MAC + classification automatique sans LLM |
@@ -75,8 +75,10 @@ Antenne WiFi (mode monitor)
 | `oui.py` | Résolution OUI → fabricant (base `manuf` de Wireshark) + mode calibration/terrain |
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
-| `send_data.sh` | Exfiltration des pcap suspects vers un serveur distant via modem 4G |
+| `scripts/send_data.sh` | Exfiltration des pcap suspects vers un serveur distant via modem 4G |
 | `mesure_plus_value.py` | Outil de mesure : quantifie le split règle/LLM et la plus-value du LLM sur pcap réels ou corpus démo |
+| `tests/` | Tests fonctionnels et de sécurité (`test_batterie`, `test_complet`, `test_prefilter`, `test_registre_ap`, `test_securite`) — lançables en direct (`python3 tests/test_xxx.py`) ou via pytest depuis la racine |
+| `docs/` | Documentation : guide capteur, configuration UP², notes (Idee, realiser, plusvalue, avantage/inconvénient) + datasheet |
 | `rapport/` | Rapports de tests et de mesure de plus-value (v1 = constat faux positifs, v2 = après correctif) |
 
 ---

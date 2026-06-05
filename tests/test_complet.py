@@ -2,6 +2,7 @@
 
 import sys, os, subprocess, json, time
 sys.path.insert(0, "/opt/capteur")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 VERT  = "\033[92m"
 ROUGE = "\033[91m"

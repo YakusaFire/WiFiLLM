@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
 
+import os, sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from prefilter import est_interessant, construire_description
 
 VERT = "\033[92m"
