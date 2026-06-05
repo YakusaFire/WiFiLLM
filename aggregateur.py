@@ -24,8 +24,9 @@
 
 from collections import defaultdict
 from traqueur import Traqueur
+from registre_ap import RegistreAP
 from oui import fabricant, infra_connue, materiel_suspect_zone
-from prefilter import score_securite_beacon
+from prefilter import score_securite_beacon, decoder_ssid, lire_canal
 
 def _mac_est_randomise(mac: str) -> bool:
     try:
@@ -93,11 +94,17 @@ def _auto_classifier(mac: str, mac_randomise: bool, frames: list,
     return None  # cas ambigu → LLM
 
 
-def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
+def agreger(candidats: list, traqueur: Traqueur | None = None,
+            registre: RegistreAP | None = None) -> list:
     """
     Regroupe les candidats par MAC source.
     Retourne une liste d'agrégats, chacun avec une description comportementale
     et éventuellement une classification automatique (sans LLM).
+
+    Si un `registre` (RegistreAP) est fourni, chaque beacon alimente la carte
+    persistante SSID→BSSID ; un nouveau BSSID usurpant un SSID déjà connu
+    (statut "conflit") est escaladé au LLM avec une comparaison des AP, qui
+    tranche l'evil_twin par antériorité.
     """
     groupes = defaultdict(list)
     for c in candidats:
@@ -118,7 +125,7 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
 
         # Profil de sécurité du beacon le plus "sur-sécurisé" (réutilise prefilter).
         # Sans ça, un AP furtif/over-secured arrivait au LLM sans aucun indice.
-        beacon_score, beacon_indices, beacon_masque = 0, [], False
+        beacon_score, beacon_indices, beacon_masque, canal = 0, [], False, ""
         for f in frames:
             if f["layers"].get("wlan.fc.type_subtype", [""])[0] == "0x0008":
                 sc, ind = score_securite_beacon(f["layers"])
@@ -126,6 +133,8 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
                     beacon_score, beacon_indices = sc, ind
                 if f["layers"].get("wlan.ssid", [""])[0] in ("", "<MISSING>"):
                     beacon_masque = True
+                if not canal:
+                    canal = lire_canal(f["layers"])
 
         ssids = set()
         for f in frames:
@@ -168,7 +177,8 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
         if n_probe:
             if ssids:
                 parties.append(
-                    f"{n_probe} Probe(s) vers {len(ssids)} SSID(s) précis : {', '.join(list(ssids)[:6])}"
+                    f"{n_probe} Probe(s) vers {len(ssids)} SSID(s) précis : "
+                    f"{', '.join(decoder_ssid(s) for s in list(ssids)[:6])}"
                 )
             else:
                 parties.append(f"{n_probe} Probe(s) wildcard (aucun réseau précis recherché)")
@@ -179,7 +189,7 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
         if n_assoc:
             parties.append(f"{n_assoc} Association(s)")
         if n_beacon:
-            nom_ssid = "SSID MASQUÉ" if beacon_masque else (list(ssids)[0] if ssids else "SSID inconnu")
+            nom_ssid = "SSID MASQUÉ" if beacon_masque else (decoder_ssid(list(ssids)[0]) if ssids else "SSID inconnu")
             if beacon_indices:
                 parties.append(
                     f"Beacon AP ({nom_ssid}) — profil de sécurité : {', '.join(beacon_indices)} "
@@ -191,6 +201,23 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
             parties.append(f"Signal {min(signals)} à {max(signals)} dBm")
 
         description = ". ".join(parties) + "."
+
+        # --- Registre persistant des AP (détection evil_twin) ---
+        # Un beacon = un AP ; sa MAC source EST le BSSID. On enregistre tout AP
+        # à SSID visible pour bâtir la carte SSID→BSSID dans la durée et obtenir
+        # le statut : "conflit" = ce SSID, déjà connu, est soudain annoncé par
+        # un nouveau BSSID (signature evil_twin).
+        statut_registre = None
+        ssid_ap = decoder_ssid(next(iter(ssids), "")) if n_beacon else ""
+        if registre is not None and ssid_ap:
+            statut_registre = registre.observer(ssid_ap, mac, {
+                "vendor":      fab,
+                "canal":       canal,
+                "profil_secu": (", ".join(beacon_indices) if beacon_indices
+                                else "profil civil (WPA2/ouvert)"),
+                "score_secu":  beacon_score,
+                "signal_max":  max(signals) if signals else -100,
+            })
 
         # Enregistre la sighting dans le traqueur
         if traqueur is not None:
@@ -223,12 +250,35 @@ def agreger(candidats: list, traqueur: Traqueur | None = None) -> list:
                     "reason": eval_traqueur["raison"],
                 }
 
+        # --- Verdict evil_twin : confié au LLM ---
+        # Un nouveau BSSID usurpe un SSID déjà connu → on escalade avec la
+        # COMPARAISON des AP (antériorité, signal, sécurité, vendor, canal) et
+        # on laisse le LLM désigner l'imposteur. Comme une attaque dure, ça
+        # prime sur l'apaisement infra_connue ci-dessous.
+        escalade_evil_twin = (statut_registre == "conflit")
+        if escalade_evil_twin:
+            comparaison = registre.description_comparative(ssid_ap)
+            description = f"{description} {comparaison}".strip()
+            auto = None
+
+        # On remonte désormais TOUS les beacons (pour alimenter le registre),
+        # mais un AP civil banal — ni sur-sécurisé, ni en conflit de SSID — ne
+        # doit pas inonder le LLM : on le classe bénin de façon déterministe.
+        elif n_beacon and auto is None and not (beacon_masque or beacon_score >= 3):
+            auto = {
+                "interesting": False,
+                "threat_level": "none",
+                "category": "normal",
+                "reason": "Beacon AP ordinaire — enregistré au registre, aucun conflit de SSID.",
+            }
+
         # En mode calibration, le matériel d'infrastructure connu du site
         # (FABRICANTS_SITE via oui.py) est traité comme bénin de façon
-        # DÉTERMINISTE — SAUF attaque dure (deauth/handshake), qui reste levée
-        # par les règles. (Le simple indice de prompt ne suffisait pas à brider
-        # le LLM : cf. rapport batterie v1, faux positifs M1/M3.)
-        if infra_connue(mac) and (auto is None or auto.get("category") not in ("deauth_attack", "handshake")):
+        # DÉTERMINISTE — SAUF attaque dure (deauth/handshake) ou conflit
+        # evil_twin, qui restent levés. (Le simple indice de prompt ne suffisait
+        # pas à brider le LLM : cf. rapport batterie v1, faux positifs M1/M3.)
+        if (not escalade_evil_twin and infra_connue(mac)
+                and (auto is None or auto.get("category") not in ("deauth_attack", "handshake"))):
             auto = {
                 "interesting": False,
                 "threat_level": "none",

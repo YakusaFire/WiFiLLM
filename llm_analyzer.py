@@ -49,7 +49,7 @@ CRITÈRES D'UN APPAREIL HOSTILE OU OPÉRATIONNEL :
 - MAC PERMANENT qui sonde plusieurs réseaux : équipement identifiable en reconnaissance → surveillance
 - MAC PERMANENT qui cherche un réseau précis : appareil traçable avec historique réseau → probe_tracking
 - Beacon avec WPA3+PMF+SSID masqué combinés : réseau opérationnel, pas civil → over_secured
-- AP imitant un réseau connu (même SSID, BSSID différent) → evil_twin
+- Plusieurs AP (BSSID différents) annonçant le MÊME SSID → evil_twin POSSIBLE. Quand tu reçois une "COMPARAISON evil-twin" entre ces AP : le BSSID le plus ANCIEN / le plus souvent vu est la référence légitime ; un NOUVEAU VENU est l'imposteur probable s'il a un signal plus fort (il "crie" pour attirer les clients), une sécurité plus faible (downgrade WPA3→WPA2/ouvert), un fabricant (OUI) ou un canal différents → category=evil_twin, threat_level medium ou high. MAIS si les AP partagent le même fabricant et la même sécurité (simple ajout d'un point d'accès / mesh d'entreprise), ce n'est PAS un evil twin → interesting=false, category=normal.
 
 INDICE FABRICANT (champ "fabricant", issu de l'OUI) — le COMPORTEMENT prime sur la marque :
 - "[équipement habituel du site]" → infrastructure connue et ATTENDUE → ne PAS traiter comme une menace sur le seul critère de la marque (un éventuel deauth/handshake reste signalé par les règles).
@@ -78,7 +78,11 @@ def analyser(description: str) -> dict:
         "format": "json",
         "options": {
             "temperature": 0.1,
-            "num_predict": 80,
+            # Plafond de tokens (pas une cible : avec format=json, le modèle
+            # s'arrête au } final). 80 tronquait le JSON sur les raisons longues
+            # — typiquement evil_twin avec sa description comparative → réponse
+            # coupée → parsing KO → faux négatif silencieux. 256 laisse finir.
+            "num_predict": 256,
         }
     }
     try:

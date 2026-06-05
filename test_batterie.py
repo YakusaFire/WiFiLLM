@@ -12,9 +12,12 @@
 #  Frames construites en mémoire (pas besoin de tshark).
 # =============================================================================
 
+import os
+import tempfile
 import oui
 from aggregateur import agreger
 from traqueur import Traqueur
+from registre_ap import RegistreAP
 from llm_analyzer import analyser
 
 V, R, J, B, GR = "\033[92m", "\033[91m", "\033[93m", "\033[94m", "\033[90m"
@@ -138,16 +141,48 @@ def run():
     print(f"     {GR}raison: {tr1_raison[:100]}{RST}")
     print(f"     {J}piège: le v1 le classait menace (faux positif) ; le correctif v2 doit l'écarter.{RST}")
 
-    # E1 : evil twin — 2 beacons même SSID, BSSID différents
+    # E1 : evil twin — ROGUE (nouveau BSSID, signal fort) usurpe un SSID établi.
+    # Le registre détecte le conflit et ESCALADE au LLM avec la comparaison ;
+    # le verdict evil_twin final (qui dépend d'Ollama) est validé sur le UP².
     oui.MODE = "calibration"
     LEGIT = "80:20:da:aa:aa:aa"; ROGUE = "00:de:ad:be:ef:00"
-    d_e1 = decision([F(LEGIT, SUB["beacon"], ssid="Wifi_Cafe", signal="-68"),
-                     F(ROGUE, SUB["beacon"], ssid="Wifi_Cafe", signal="-30")], "calibration")
-    rogue_flag = next((x[1] for x in d_e1 if x[0] == ROGUE), False)
-    print(f"\n[{J}GAP{RST}] {G}E1{RST} {J}[PIÈGE]{RST} — Evil twin : 2 AP même SSID 'Wifi_Cafe', BSSID différents")
-    print(f"     AP pirate (ROGUE {ROGUE}) signalé ? {rogue_flag}  (attendu : RATÉ, gap documenté)")
-    for mac, flag, chemin, cat, raison in d_e1:
-        print(f"     {GR}{mac} → flag={flag} {chemin}/{cat} : {raison[:70]}{RST}")
+    reg = RegistreAP(chemin=os.path.join(tempfile.mkdtemp(), "reg.json"))
+    for _ in range(4):                      # LEGIT établi sur 4 fenêtres (antériorité)
+        reg.nouvelle_fenetre()
+        agreger([F(LEGIT, SUB["beacon"], ssid="Wifi_Cafe", signal="-68")], Traqueur(), reg)
+    reg.nouvelle_fenetre()                  # fenêtre où le pirate apparaît
+    agr_e1 = agreger([F(LEGIT, SUB["beacon"], ssid="Wifi_Cafe", signal="-68"),
+                      F(ROGUE, SUB["beacon"], ssid="Wifi_Cafe", signal="-30")], Traqueur(), reg)
+    rogue_agr = next((a for a in agr_e1 if a["mac"] == ROGUE), None)
+    legit_agr = next((a for a in agr_e1 if a["mac"] == LEGIT), None)
+    e1_escalade    = rogue_agr is not None and rogue_agr["auto_class"] is None
+    e1_comparaison = rogue_agr is not None and "COMPARAISON evil-twin" in rogue_agr["description"]
+    e1_legit_benin = (legit_agr is not None and legit_agr["auto_class"] is not None
+                      and not legit_agr["auto_class"]["interesting"])
+    e1_ok = e1_escalade and e1_comparaison and e1_legit_benin
+    tag = f"{V}OK{RST}" if e1_ok else f"{R}KO{RST}"
+    print(f"\n[{tag}] {G}E1{RST} {J}[evil twin]{RST} — ROGUE usurpe 'Wifi_Cafe' (signal -30 vs réf -68)")
+    print(f"     ROGUE escaladé au LLM (auto=None) : {e1_escalade} | comparaison injectée : {e1_comparaison}")
+    print(f"     Référence LEGIT laissée bénigne   : {e1_legit_benin}")
+    if rogue_agr is not None and rogue_agr["auto_class"] is None:
+        print(f"     {GR}…{rogue_agr['description'][-200:]}{RST}")
+
+    # E2 : mesh légitime — 2 AP même SSID, connus de longue date. Une fois
+    # STABILISÉS (n_fenetres > seuil), ils ne doivent PLUS ré-escalader à chaque
+    # fenêtre, sinon le LLM serait noyé sous chaque réseau multi-AP banal.
+    reg2 = RegistreAP(chemin=os.path.join(tempfile.mkdtemp(), "reg.json"))
+    AP_A, AP_B = "80:20:da:aa:aa:aa", "80:20:da:bb:bb:bb"
+    for _ in range(5):
+        reg2.nouvelle_fenetre()
+        agreger([F(AP_A, SUB["beacon"], ssid="Entreprise", signal="-55"),
+                 F(AP_B, SUB["beacon"], ssid="Entreprise", signal="-58")], Traqueur(), reg2)
+    reg2.nouvelle_fenetre()
+    agr_e2 = agreger([F(AP_A, SUB["beacon"], ssid="Entreprise", signal="-55"),
+                      F(AP_B, SUB["beacon"], ssid="Entreprise", signal="-58")], Traqueur(), reg2)
+    e2_ok = all(a["auto_class"] is not None and not a["auto_class"]["interesting"] for a in agr_e2)
+    tag = f"{V}OK{RST}" if e2_ok else f"{R}KO{RST}"
+    print(f"\n[{tag}] {G}E2{RST} {J}[mesh légitime]{RST} — 2 AP même SSID stabilisés → pas de ré-escalade")
+    print(f"     Aucune escalade en régime établi : {e2_ok}")
 
     # ── BILAN ──
     print(f"\n{G}{B}{'='*70}{RST}\n{G}{B}  BILAN — DÉTECTION DES APPAREILS HOSTILES{RST}\n{G}{B}{'='*70}{RST}")
@@ -163,7 +198,8 @@ def run():
     print(f"  Bénins correctement ignorés             : {tn}/{len(benins)} (+TR1)")
     print(f"  {R}Hostiles RATÉS (faux négatifs)          : {fn or 'aucun'}{RST}")
     print(f"  {J}Fausses alertes (faux positifs)         : {fp or 'aucune'}{RST}")
-    print(f"\n  {GR}Note : E1 (evil twin) hors comptage — gap connu et documenté.{RST}")
+    print(f"\n  {GR}Note : E1/E2 (evil twin) — détection via registre persistant SSID→BSSID ;{RST}")
+    print(f"  {GR}       le verdict evil_twin final (Ollama) se valide sur le UP².{RST}")
 
 if __name__ == "__main__":
     run()

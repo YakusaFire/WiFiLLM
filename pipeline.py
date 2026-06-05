@@ -8,7 +8,8 @@
 #                 2. aggregateur — regroupement par MAC + classification auto
 #                 3. llm_analyzer — analyse LLM pour les cas ambigus seulement
 #                 4. extractor   — export du pcap filtré + JSON dans interesting/
-#               Un Traqueur partagé maintient la mémoire inter-pcap des appareils.
+#               Un Traqueur partagé maintient la mémoire inter-pcap des appareils
+#               et un RegistreAP persistant la carte SSID→BSSID (détection evil_twin).
 #               Les pcap traités sont déplacés dans /data/capture/done/.
 #
 #  Entrées    : /data/capture/raw/*.pcap  (produits par capture.sh)
@@ -16,7 +17,7 @@
 #               /data/capture/done/*.pcap (archives)
 #
 #  Dépend de  : prefilter.py, aggregateur.py, llm_analyzer.py, extractor.py,
-#               traqueur.py, tshark, Ollama (localhost:11434)
+#               traqueur.py, registre_ap.py, tshark, Ollama (localhost:11434)
 #  Lancé par  : capteur.sh start (via nohup en arrière-plan)
 #  Log        : /var/log/capteur.log
 # =============================================================================
@@ -30,6 +31,7 @@ from aggregateur import agreger
 from llm_analyzer import analyser
 from extractor import extraire
 from traqueur import Traqueur
+from registre_ap import RegistreAP
 
 CAPTURE_DIR = "/data/capture/raw"
 ARCHIVE_DIR = "/data/capture/done"
@@ -45,8 +47,12 @@ logging.basicConfig(
     ]
 )
 
-def traiter(pcap_path: str, traqueur: Traqueur | None = None):
+def traiter(pcap_path: str, traqueur: Traqueur | None = None,
+            registre: RegistreAP | None = None):
     logging.info(f"→ {os.path.basename(pcap_path)}")
+
+    if registre is not None:
+        registre.nouvelle_fenetre()
 
     candidats = filtrer_pcap(pcap_path)
     if not candidats:
@@ -54,7 +60,7 @@ def traiter(pcap_path: str, traqueur: Traqueur | None = None):
         os.rename(pcap_path, os.path.join(ARCHIVE_DIR, os.path.basename(pcap_path)))
         return
 
-    agregats = agreger(candidats, traqueur)
+    agregats = agreger(candidats, traqueur, registre)
     logging.info(f"  {len(candidats)} trame(s) → {len(agregats)} appareil(s)")
 
     interessants = []
@@ -94,6 +100,9 @@ def traiter(pcap_path: str, traqueur: Traqueur | None = None):
     else:
         logging.info("  Aucune trame intéressante")
 
+    if registre is not None:
+        registre.sauver()
+
     os.rename(pcap_path, os.path.join(ARCHIVE_DIR, os.path.basename(pcap_path)))
 
 
@@ -101,14 +110,16 @@ def main():
     logging.info("Pipeline démarré")
     traites  = set()
     traqueur = Traqueur()
+    registre = RegistreAP()
 
     while True:
         traqueur.nettoyer()
+        registre.purger()
         fichiers = sorted(glob.glob(os.path.join(CAPTURE_DIR, "*.pcap")))
         for f in fichiers:
             if f not in traites:
                 try:
-                    traiter(f, traqueur)
+                    traiter(f, traqueur, registre)
                 except Exception as e:
                     logging.error(f"  ERREUR sur {os.path.basename(f)} : {e}")
                 traites.add(f)

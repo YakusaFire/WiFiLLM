@@ -51,6 +51,12 @@ Antenne WiFi (mode monitor)
   [traqueur.py]  (objet partagé dans pipeline.py)
         └── historique inter-pcap des appareils observés
               → escalade au LLM si appareil persistant ou en reconnaissance
+
+  [registre_ap.py]  (objet partagé, PERSISTANT sur disque)
+        └── carte SSID→BSSID sur des jours/semaines
+              → un nouveau BSSID sur un SSID déjà connu (evil twin) est
+                escaladé au LLM avec une comparaison des AP (antériorité,
+                signal, sécurité, vendor, canal)
 ```
 
 ---
@@ -64,7 +70,8 @@ Antenne WiFi (mode monitor)
 | `pipeline.py` | Orchestrateur : surveille les pcap et enchaîne les étapes |
 | `prefilter.py` | Filtre déterministe — extrait et décrit les trames suspectes |
 | `aggregateur.py` | Agrégation par MAC + classification automatique sans LLM |
-| `traqueur.py` | Traqueur inter-pcap — historique de persistance des appareils |
+| `traqueur.py` | Traqueur inter-pcap — historique de persistance des appareils (RAM) |
+| `registre_ap.py` | Registre **persistant** des AP (carte SSID→BSSID) — détection d'evil twin |
 | `oui.py` | Résolution OUI → fabricant (base `manuf` de Wireshark) + mode calibration/terrain |
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
@@ -154,7 +161,7 @@ Lit le pcap avec `tshark -T json -e field...` et inspecte chaque trame **sans ap
 | Disassociation | `0x000a` | Déconnexion |
 | EAPOL | — | Handshake WPA2 4-way |
 
-**Beacons (`0x0008`) retenus seulement si** le score de sécurité ≥ 3. Ce score cumule :
+**Beacons (`0x0008`) : tous inventoriés, dédupliqués par BSSID.** Depuis l'ajout de la détection d'evil twin, *tous* les beacons sont remontés (un seul par BSSID, celui au signal le plus fort) pour alimenter le registre persistant `SSID→BSSID`. Le canal (`wlan.ds.current_channel`, sinon `wlan_radio.channel`) est extrait comme discriminant. Un beacon banal est enregistré au registre puis classé bénin par `aggregateur.py` (il n'atteint pas le LLM) ; le **score de sécurité ≥ 3** ne décide plus de la *capture* mais sert à escalader un beacon **sur-sécurisé** (`over_secured`) au LLM. Ce score cumule :
 
 | Indice | Points |
 |---|---|
@@ -199,6 +206,10 @@ Les cas non couverts par ces règles sont transmis au LLM avec la description co
 
 Si un appareil à MAC randomisé serait normalement ignoré mais que le `Traqueur` le juge persistant ou en reconnaissance active, son cas est **escaladé au LLM** avec le contexte historique ajouté à la description.
 
+**Interaction avec le registre AP (evil twin) :**
+
+Pour chaque beacon, le BSSID (= MAC source de l'AP) et son SSID sont enregistrés dans `registre_ap.py`. Si le registre retourne le statut `conflit` (nouveau BSSID sur un SSID déjà connu), le cas est **escaladé au LLM** avec la **comparaison des AP** ajoutée à la description — cela prime sur l'apaisement `infra_connue`, comme une attaque dure. Un beacon ordinaire sans conflit ni sur-sécurisation est classé **bénin** de façon déterministe (il alimente le registre mais n'atteint pas le LLM).
+
 ---
 
 ### `traqueur.py` — Mémoire inter-pcap
@@ -222,6 +233,24 @@ Maintient l'historique de chaque appareil observé **entre les pcap successifs**
 | `FENETRE_OUBLI` | 600 s (10 min) | Durée sans activité avant suppression de l'historique |
 
 Le contexte historique ajouté à la description LLM précise le nombre d'apparitions, la durée de présence, et les SSIDs cumulés.
+
+---
+
+### `registre_ap.py` — Registre persistant des AP (détection d'evil twin)
+
+Pendant **persistant sur disque** du traqueur, dédié aux points d'accès. Là où le traqueur oublie en RAM après 10 min, le registre maintient sur **des jours/semaines** la carte `SSID → {BSSID → caractéristiques}` (vendor OUI, canal, profil de sécurité, signal max, antériorité). C'est cette mémoire longue qui rend la détection d'**evil twin** possible : savoir qu'un BSSID est légitime *parce qu'il émet ce SSID depuis longtemps*.
+
+**Principe — l'antériorité fait la légitimité.** Le BSSID vu en premier / le plus souvent pour un SSID est la **référence présumée** ; un BSSID qui apparaît **ensuite** sur ce SSID établi est un *nouveau venu* suspect. Le registre ne **juge pas** : il détecte le **conflit** et fournit une **comparaison** des AP en présence. C'est le LLM, en aval, qui désigne l'imposteur (critère : signal plus fort, sécurité plus faible, vendor ou canal différents).
+
+| Méthode | Rôle |
+|---|---|
+| `nouvelle_fenetre()` | Marque le passage à un nouveau pcap (1 apparition comptée par fenêtre) |
+| `observer(ssid, bssid, infos)` | Enregistre/actualise un AP → statut `premier_du_ssid` / `connu` / `conflit` |
+| `description_comparative(ssid)` | Texte comparatif (antériorité, vendor, sécurité, canal, signal) injecté dans le prompt LLM |
+| `purger(max_age_jours)` | Oublie les BSSID inactifs depuis > 14 jours |
+| `charger()` / `sauver()` | Persistance JSON atomique (`/data/capture/registre_ap.json`) |
+
+**Statut `conflit`** = ce SSID a ≥ 2 BSSID distincts **et** le BSSID courant est un *nouveau venu* (vu sur ≤ 2 fenêtres). Ce critère couvre le cas réaliste (référence ancienne + pirate récent) comme le démarrage à froid (deux AP découverts dans la même fenêtre, le LLM tranchant alors sur signal/sécurité/vendor). Un réseau **mesh/multi-AP légitime**, une fois ses BSSID stabilisés, repasse en `connu` et ne ré-escalade plus (anti-bruit). Les **SSID masqués** ne sont pas indexés (un evil twin imite un SSID *visible* ; le masqué reste géré par `over_secured`).
 
 ---
 
@@ -254,7 +283,7 @@ Envoie la description comportementale agrégée d'un appareil à Ollama (`qwen2.
 | `deauth_attack` | Déauthentification suspecte — possible attaque de déconnexion |
 | `handshake` | Capture d'un handshake WPA2 4-way |
 | `over_secured` | Réseau avec profil de sécurité anormal pour un civil |
-| `evil_twin` | Point d'accès imitant un réseau légitime |
+| `evil_twin` | AP imitant un réseau légitime (même SSID, BSSID différent) — alimenté par `registre_ap.py` (jugement par antériorité) |
 | `covert_ap` | Point d'accès clandestin |
 | `surveillance` | Balayage actif de probes ou comportement de surveillance |
 | `anomaly` | Comportement 802.11 anormal non classifié |
@@ -334,7 +363,8 @@ Exemple de log pipeline :
 ├── pipeline.py       ← orchestrateur
 ├── prefilter.py      ← filtre déterministe
 ├── aggregateur.py    ← agrégation comportementale par MAC
-├── traqueur.py       ← mémoire inter-pcap des appareils
+├── traqueur.py       ← mémoire inter-pcap des appareils (RAM)
+├── registre_ap.py    ← registre persistant SSID→BSSID (détection evil twin)
 ├── oui.py            ← résolution OUI → fabricant + mode calibration/terrain
 ├── llm_analyzer.py   ← interface LLM
 ├── extractor.py      ← extraction des résultats
@@ -343,7 +373,8 @@ Exemple de log pipeline :
 /data/capture/
 ├── raw/              ← pcap en cours de traitement (rotation 30 s)
 ├── done/             ← pcap traités et archivés
-└── interesting/      ← pcap + JSON des captures suspectes retenues
+├── interesting/      ← pcap + JSON des captures suspectes retenues
+└── registre_ap.json  ← carte persistante SSID→BSSID (détection evil twin)
 
 /var/log/
 ├── capteur.log       ← log pipeline

@@ -72,6 +72,21 @@ def decoder_ssid(raw: str) -> str:
     except ValueError:
         return raw
 
+def lire_canal(layers: dict) -> str:
+    """Canal radio d'un beacon : DS Parameter Set en priorité, sinon radiotap."""
+    for champ in ("wlan.ds.current_channel", "wlan_radio.channel"):
+        val = layers.get(champ, [""])
+        if val and val[0] not in ("", "<MISSING>"):
+            return str(val[0])
+    return ""
+
+def signal_dbm(layers: dict) -> int:
+    """Signal radiotap en dBm (entier), -100 par défaut/illisible."""
+    try:
+        return int(layers.get("radiotap.dbm_antsignal", ["-100"])[0])
+    except (ValueError, IndexError):
+        return -100
+
 def extraire_metadonnees(pcap_path: str) -> list:
     cmd = [
         "tshark", "-r", pcap_path, "-T", "json",
@@ -83,6 +98,10 @@ def extraire_metadonnees(pcap_path: str) -> list:
         "-e", "wlan.da",
         "-e", "radiotap.dbm_antsignal",
         "-e", "eapol.type",
+        # Canal (DS Parameter Set du beacon, sinon dérivé du radiotap) —
+        # discriminant evil_twin : un AP pirate est souvent sur un autre canal.
+        "-e", "wlan.ds.current_channel",
+        "-e", "wlan_radio.channel",
         # Sécurité beacon
         "-e", "wlan.rsn.akms",
         "-e", "wlan.rsn.pcs",
@@ -225,7 +244,9 @@ def construire_description(frame: dict) -> str:
     if subtype == "0x0008":
         score, indices = score_securite_beacon(layers)
         ssid_txt = f"'{ssid}'" if ssid and ssid != "(vide)" else "MASQUÉ"
-        desc = f"Beacon réseau {ssid_txt}, BSSID {bssid}, signal {signal}dBm"
+        canal = lire_canal(layers)
+        canal_txt = f", canal {canal}" if canal else ""
+        desc = f"Beacon réseau {ssid_txt}, BSSID {bssid}{canal_txt}, signal {signal}dBm"
         if indices:
             desc += f". Profil de sécurité : {', '.join(indices)}"
             desc += f". Score de sur-sécurisation : {score}/12 — un civil ordinaire n'activerait pas ces protections simultanément"
@@ -242,13 +263,31 @@ def construire_description(frame: dict) -> str:
 def filtrer_pcap(pcap_path: str) -> list:
     frames = extraire_metadonnees(pcap_path)
     candidats = []
+    beacons_par_bssid: dict = {}   # bssid -> (signal, candidat)
     for frame in frames:
-        if est_interessant(frame):
-            layers = frame.get("_source", {}).get("layers", {})
-            numero = layers.get("frame.number", ["?"])[0]
+        layers = frame.get("_source", {}).get("layers", {})
+        subtype = layers.get("wlan.fc.type_subtype", [""])[0]
+
+        if subtype == "0x0008":
+            # TOUS les beacons sont inventoriés (ils alimentent le registre AP
+            # pour la détection d'evil twin), mais DÉDUPLIQUÉS par BSSID : on ne
+            # garde que la trame au signal le plus fort, pour ne pas inonder le
+            # pipeline avec les ~15 beacons/AP d'une fenêtre de 30 s.
+            bssid = layers.get("wlan.bssid", ["?"])[0]
+            sig = signal_dbm(layers)
+            prev = beacons_par_bssid.get(bssid)
+            if prev is None or sig > prev[0]:
+                beacons_par_bssid[bssid] = (sig, {
+                    "numero": layers.get("frame.number", ["?"])[0],
+                    "description": construire_description(frame),
+                    "layers": layers,
+                })
+        elif est_interessant(frame):
             candidats.append({
-                "numero": numero,
+                "numero": layers.get("frame.number", ["?"])[0],
                 "description": construire_description(frame),
                 "layers": layers,
             })
+
+    candidats.extend(cand for _, cand in beacons_par_bssid.values())
     return candidats
