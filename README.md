@@ -319,7 +319,7 @@ Pour chaque fichier pcap contenant au moins une trame intéressante, extrait exa
 └── raw_20260603_125601_20260603_125656_analyse.json ← rapport LLM
 ```
 
-Le JSON contient pour chaque trame : le numéro, la description textuelle, les métadonnées brutes (layers tshark) et la réponse complète du LLM (`interesting`, `threat_level`, `category`, `reason`).
+Le JSON contient pour chaque trame : le numéro, le **SSID en clair** (`ssid`, nom de l'AP décodé depuis l'hexadécimal tshark — vide si masqué/absent), la description textuelle, les métadonnées brutes (layers tshark, où `wlan.ssid` reste en hexa) et la réponse complète du LLM (`interesting`, `threat_level`, `category`, `reason`).
 
 ---
 

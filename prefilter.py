@@ -279,12 +279,14 @@ def filtrer_pcap(pcap_path: str) -> list:
             if prev is None or sig > prev[0]:
                 beacons_par_bssid[bssid] = (sig, {
                     "numero": layers.get("frame.number", ["?"])[0],
+                    "ssid": decoder_ssid(layers.get("wlan.ssid", [""])[0]),
                     "description": construire_description(frame),
                     "layers": layers,
                 })
         elif est_interessant(frame):
             candidats.append({
                 "numero": layers.get("frame.number", ["?"])[0],
+                "ssid": decoder_ssid(layers.get("wlan.ssid", [""])[0]),
                 "description": construire_description(frame),
                 "layers": layers,
             })
