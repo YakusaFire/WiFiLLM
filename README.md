@@ -44,6 +44,10 @@ Antenne WiFi (mode monitor)
         │         ▼
         └─── [extractor.py] ──── tshark ──→ /data/capture/interesting/
                                               *.pcap  +  *_analyse.json
+                  │
+                  └─── [envoi_trames.py] ──── scp ──→  PC de dev : trames/
+                            (push UP²→PC du pcap filtré + json, à l'événement ;
+                             source conservée côté UP²)
         │
         ▼
   pcap traité déplacé vers /data/capture/done/
@@ -75,6 +79,8 @@ Antenne WiFi (mode monitor)
 | `oui.py` | Résolution OUI → fabricant (base `manuf` de Wireshark) + mode calibration/terrain |
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
+| `envoi_trames.py` | Push scp **UP²→PC** du pcap filtré + JSON vers `trames/`, à l'événement (déclenché par `pipeline.py` après extraction) |
+| `scripts/setup_push_trames.py` | Met en place / resynchronise le push trames : dépose la clé privée sur le UP² et pousse le code à jour (à lancer du PC, UP² en ligne) |
 | `scripts/send_data.sh` | Exfiltration des pcap suspects vers un serveur distant via modem 4G |
 | `mesure_plus_value.py` | Outil de mesure : quantifie le split règle/LLM et la plus-value du LLM sur pcap réels ou corpus démo |
 | `tests/` | Tests fonctionnels et de sécurité (`test_batterie`, `test_complet`, `test_prefilter`, `test_registre_ap`, `test_securite`) — lançables en direct (`python3 tests/test_xxx.py`) ou via pytest depuis la racine |
@@ -317,6 +323,31 @@ Le JSON contient pour chaque trame : le numéro, la description textuelle, les m
 
 ---
 
+### `envoi_trames.py` — Push des trames intéressantes vers le PC
+
+Dès qu'un pcap produit au moins une trame intéressante, `pipeline.py` appelle `pousser()` qui envoie en **scp** le pcap filtré **et** son `_analyse.json` vers le poste de dev (sens **UP²→PC**), dans `trames/`. C'est un push **événementiel** : « au moment où » la trame est détectée, pas un balayage périodique. La source côté UP² (`interesting/`) **n'est pas supprimée** — elle reste une archive locale au capteur.
+
+Le module est conçu pour ne **jamais casser la pipeline** : connexion en `BatchMode` avec `ConnectTimeout`, et tout échec (PC éteint, lien coupé, clé absente) est journalisé en *warning* puis ignoré. S'il n'est pas configuré, il est silencieusement inactif.
+
+**Configuration** (variables d'environnement posées par `capteur.sh`, surchargeables via `/root/capteur.env`) :
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `TRAMES_DEST` | `2039nngy@100.64.115.128:.../trames/` | Destination scp `user@ip:/chemin/`. **Vide → push désactivé** |
+| `TRAMES_SSH_KEY` | `/root/.ssh/trames_push` | Clé privée dédiée pour l'auth UP²→PC |
+| `TRAMES_SCP_TIMEOUT` | `20` | Délai max de connexion scp (s) |
+
+**Authentification.** Une paire de clés ed25519 dédiée (`trames_push`) porte le sens UP²→PC : la clé **publique** est dans le `~/.ssh/authorized_keys` du PC, la clé **privée** dans `/root/.ssh/trames_push` sur le UP². Mise en place / resynchro depuis le PC, UP² en ligne :
+
+```bash
+python3 scripts/setup_push_trames.py   # dépose la clé + pousse le code à jour
+# puis sur le UP² :  su -  &&  bash /root/capteur.sh restart
+```
+
+Le log pipeline trace l'envoi : `Envoyé → trames/ (raw_..._.pcap + json)`.
+
+---
+
 ### `send_data.sh` — Exfiltration via modem 4G
 
 Script déclenché manuellement (ou par cron) pour exfiltrer les pcap suspects vers un serveur distant lorsque le réseau Tailscale n'est pas disponible.
@@ -370,7 +401,10 @@ Exemple de log pipeline :
 ├── oui.py            ← résolution OUI → fabricant + mode calibration/terrain
 ├── llm_analyzer.py   ← interface LLM
 ├── extractor.py      ← extraction des résultats
-└── send_data.sh      ← exfiltration 4G (optionnel)
+├── envoi_trames.py   ← push scp UP²→PC des trames intéressantes vers trames/
+├── send_data.sh      ← exfiltration 4G (optionnel)
+├── capteur.env       ← config optionnelle (TRAMES_DEST…) surchargeant capteur.sh
+└── .ssh/trames_push  ← clé privée dédiée au push UP²→PC
 
 /data/capture/
 ├── raw/              ← pcap en cours de traitement (rotation 30 s)

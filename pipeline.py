@@ -30,6 +30,7 @@ from prefilter import filtrer_pcap
 from aggregateur import agreger
 from llm_analyzer import analyser
 from extractor import extraire
+from envoi_trames import pousser
 from traqueur import Traqueur
 from registre_ap import RegistreAP
 
@@ -97,6 +98,9 @@ def traiter(pcap_path: str, traqueur: Traqueur | None = None,
         out = extraire(pcap_path, interessants)
         if out:
             logging.info(f"  Extrait → {os.path.basename(out)}")
+            json_path = out.replace(".pcap", "_analyse.json")
+            if pousser(out, json_path):
+                logging.info(f"  Envoyé → trames/ ({os.path.basename(out)} + json)")
     else:
         logging.info("  Aucune trame intéressante")
 

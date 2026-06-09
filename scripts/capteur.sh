@@ -25,6 +25,15 @@ LOG_CAPTURE="/var/log/capture.log"
 LOG_PIPELINE="/var/log/capteur.log"
 PID_DIR="/var/run"
 
+# --- Push des trames intéressantes vers le poste de dev (scp UP²→PC) ----------
+# Surchargeable sans toucher au script : créer /root/capteur.env avec
+#   TRAMES_DEST="user@ip:/chemin/trames/"
+# Laisser TRAMES_DEST vide désactive le push (la pipeline tourne sans).
+[ -f /root/capteur.env ] && . /root/capteur.env
+TRAMES_DEST="${TRAMES_DEST:-2039nngy@100.64.115.128:/home/2039nngy/Documents/PROJECT/WIFIEmbarquer/trames/}"
+TRAMES_SSH_KEY="${TRAMES_SSH_KEY:-/root/.ssh/trames_push}"
+export TRAMES_DEST TRAMES_SSH_KEY
+
 start() {
     if pgrep -f "pipeline.py" > /dev/null; then
         echo "Déjà en cours d'exécution."
