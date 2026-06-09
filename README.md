@@ -264,7 +264,13 @@ Pendant **persistant sur disque** du traqueur, dédié aux points d'accès. Là 
 
 ### `oui.py` — Résolution fabricant (OUI)
 
-Donne le **fabricant** d'une MAC à partir de son **OUI** (les 3 premiers octets, attribués par l'IEEE), par lookup déterministe contre la base `manuf` de Wireshark — **jamais** via le LLM (qui hallucinerait les marques). `aggregateur.py` injecte ce fabricant dans la description envoyée au LLM.
+Donne le **fabricant** d'une MAC à partir de son **OUI** (les 3 premiers octets, attribués par l'IEEE), par lookup déterministe contre la base `manuf` de Wireshark — **jamais** via le LLM (qui hallucinerait les marques). `aggregateur.py` résout l'OUI de **toutes les MAC pertinentes d'une trame suspecte**, pas seulement l'émetteur :
+
+- **source** (`wlan.sa`) : l'appareil émetteur ;
+- **cible d'une deauth ciblée** (`wlan.da`) : la *victime* — sa MAC n'étant pas spoofée, son fabricant révèle **quel appareil est attaqué** ;
+- **BSSID** (`wlan.bssid`) : l'AP concerné/usurpé, listé via `AP concerné : …` quand il diffère de la source.
+
+Intérêt clé : même si l'attaquant **spoofe/randomise sa propre source**, les autres MAC de la trame (victime, AP) restent exploitables.
 
 - Ne résout que les **MAC permanentes** : une MAC randomisée (bit `0x02`) a un OUI bidon → retourne `None`.
 - **Mode d'emploi** (variable d'env `CAPTEUR_MODE`, défaut `calibration`) :

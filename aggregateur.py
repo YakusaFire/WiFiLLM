@@ -34,6 +34,13 @@ def _mac_est_randomise(mac: str) -> bool:
     except Exception:
         return False
 
+def _mac_avec_fabricant(mac: str) -> str:
+    """'AA:BB:CC:… (Fabricant)' si l'OUI est résolu (MAC permanente connue),
+    sinon la MAC seule. Permet d'enrichir TOUTES les MAC d'une trame suspecte
+    (source, cible de deauth, BSSID) et pas seulement l'émetteur."""
+    fab = fabricant(mac)
+    return f"{mac} ({fab})" if fab else mac
+
 def _auto_classifier(mac: str, mac_randomise: bool, frames: list,
                      n_deauth: int, n_probe: int, n_eapol: int, n_auth: int,
                      ssids: set, bssids_deauth: set) -> dict | None:
@@ -148,6 +155,16 @@ def agreger(candidats: list, traqueur: Traqueur | None = None,
             if f["layers"].get("wlan.fc.type_subtype", [""])[0] == "0x000c"
         )
 
+        # OUI des AUTRES MAC d'une trame suspecte (pas seulement l'émetteur) :
+        #  - cible d'une deauth ciblée (wlan.da) = la VICTIME ; sa MAC n'est pas
+        #    spoofée → son fabricant révèle QUEL appareil est attaqué.
+        #  - BSSID (wlan.bssid) = l'AP concerné/usurpé ; ≠ source pour une deauth/
+        #    EAPOL/auth (pour un beacon, bssid == sa, déjà couvert par la source).
+        cibles_deauth = {b for b in bssids_deauth if b not in ("ff:ff:ff:ff:ff:ff", "")}
+        bssids_ap = {
+            f["layers"].get("wlan.bssid", [""])[0] for f in frames
+        } - {"ff:ff:ff:ff:ff:ff", "", "?", mac}
+
         signals = []
         for f in frames:
             try:
@@ -171,9 +188,14 @@ def agreger(candidats: list, traqueur: Traqueur | None = None,
 
         if n_deauth:
             broadcast = "ff:ff:ff:ff:ff:ff" in bssids_deauth
-            parties.append(
-                f"{n_deauth} Deauthentification(s) {'broadcast (déconnexion de masse)' if broadcast else 'ciblée(s)'}"
-            )
+            if broadcast:
+                parties.append(f"{n_deauth} Deauthentification(s) broadcast (déconnexion de masse)")
+            else:
+                cibles_txt = ", ".join(_mac_avec_fabricant(c) for c in sorted(cibles_deauth)[:4])
+                parties.append(
+                    f"{n_deauth} Deauthentification(s) ciblée(s)"
+                    + (f" vers {cibles_txt}" if cibles_txt else "")
+                )
         if n_probe:
             if ssids:
                 parties.append(
@@ -197,6 +219,11 @@ def agreger(candidats: list, traqueur: Traqueur | None = None,
                 )
             else:
                 parties.append(f"Beacon AP ({nom_ssid})")
+        # Fabricant de l'AP concerné (BSSID), quand il diffère de la source et que
+        # son OUI est résolu — éclaire deauth/EAPOL/auth visant ou usurpant un AP.
+        ap_txt = ", ".join(sorted(_mac_avec_fabricant(b) for b in bssids_ap if fabricant(b)))
+        if ap_txt:
+            parties.append(f"AP concerné : {ap_txt}")
         if signals:
             parties.append(f"Signal {min(signals)} à {max(signals)} dBm")
 
