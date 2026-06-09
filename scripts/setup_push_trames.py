@@ -8,7 +8,8 @@
 #               Étapes :
 #                 1. Connexion SSH au UP² avec les identifiants de .env
 #                 2. Dépôt de la clé privée dédiée dans /root/.ssh/trames_push
-#                 3. Sync du code à jour (envoi_trames.py, pipeline.py, capteur.sh)
+#                 3. Sync de TOUT le code du capteur (pipeline.py + tous les
+#                    modules qu'il importe + scripts capteur.sh/capture.sh)
 #                 4. Vérification de la présence des fichiers
 #               La clé PUBLIQUE correspondante doit déjà être dans le
 #               ~/.ssh/authorized_keys de ce PC (fait par la mise en place).
@@ -26,13 +27,23 @@ import paramiko
 RACINE   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLE_PRIV = os.path.expanduser("~/.ssh/trames_push")
 
-# Fichiers à pousser : (source locale, destination /root, mode octal)
+# Fichiers à pousser : (source locale, destination /root, mode octal).
+# Doit couvrir TOUT ce que le capteur exécute dans /root : pipeline.py + chaque
+# module qu'il importe (directement, ou via aggregateur) + les scripts shell.
+# Sinon une modif locale d'un de ces modules ne part jamais sur le UP²
+# → divergence silencieuse PC ↔ UP² (bugs difficiles à diagnostiquer).
 A_DEPLOYER = [
-    (CLE_PRIV,                             "/root/.ssh/trames_push", "600"),
-    (os.path.join(RACINE, "envoi_trames.py"),     "/root/envoi_trames.py", "644"),
-    (os.path.join(RACINE, "pipeline.py"),         "/root/pipeline.py",     "644"),
-    (os.path.join(RACINE, "scripts/capteur.sh"),  "/root/capteur.sh",      "755"),
+    (CLE_PRIV, "/root/.ssh/trames_push", "600"),
 ]
+# Modules Python du pipeline : pipeline.py et toute sa chaîne d'imports
+# (prefilter, aggregateur → {traqueur, registre_ap, oui, prefilter}, llm_analyzer,
+#  extractor, envoi_trames).
+for _mod in ("pipeline", "prefilter", "aggregateur", "llm_analyzer", "extractor",
+             "envoi_trames", "traqueur", "registre_ap", "oui"):
+    A_DEPLOYER.append((os.path.join(RACINE, f"{_mod}.py"), f"/root/{_mod}.py", "644"))
+# Scripts shell d'orchestration (capteur.sh lance capture.sh en /root/capture.sh).
+for _scr in ("capteur.sh", "capture.sh"):
+    A_DEPLOYER.append((os.path.join(RACINE, "scripts", _scr), f"/root/{_scr}", "755"))
 
 
 def charger_env(chemin):
@@ -84,8 +95,9 @@ def main():
 
     sftp.close()
 
-    # Vérification rapide
-    code, out, _ = sudo("ls -l /root/.ssh/trames_push /root/envoi_trames.py /root/pipeline.py /root/capteur.sh")
+    # Vérification rapide : liste tout ce qui vient d'être déployé
+    cibles = " ".join(dst for _, dst, _ in A_DEPLOYER)
+    code, out, _ = sudo(f"ls -l {cibles}")
     print("\nVérification côté UP² :")
     print(out.rstrip())
     cli.close()
