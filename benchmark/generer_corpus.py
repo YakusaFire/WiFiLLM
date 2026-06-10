@@ -133,8 +133,8 @@ W("b3_assoc_domestique", [auth(PERM, signal=-70), assoc(PERM, "Livebox-2A30", si
 # Pièges
 W("p1_glinet_deauth", [deauth(GLINET, BCAST, -40) for _ in range(6)],
   {GLINET: {"interesting": True, "category": "deauth_attack", "label": "Ami fait un deauth"}})
-W("p2_evasion_seuil", [probe(RPI, f"Z{i}", -55) for i in range(4)],
-  {RPI: {"interesting": True, "category": None, "label": "Évasion seuil (4 SSID)"}})
+W("p2_surveillance_4ssid", [probe(RPI, f"Z{i}", -55) for i in range(4)],
+  {RPI: {"interesting": True, "category": "surveillance", "label": "Permanent sonde 4 SSID (surveillance, règle)"}})
 W("p3_esp_probe", [probe(ESP, "", -50) for _ in range(3)],
   {ESP: {"interesting": True, "category": None, "label": "ESP sonde (deauther ?)"}})
 W("p4_glinet_zone", [probe(GLINET, f"AP{i}", -55) for i in range(6)],

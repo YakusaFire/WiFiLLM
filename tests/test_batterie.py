@@ -81,9 +81,9 @@ S("R6", "Probes ciblés depuis MAC randomisé", [F(PHONE2, SUB["probe"], ssid="M
 S("P1", "PIÈGE : GL.iNet (ami) fait un deauth broadcast — doit QUAND MÊME être levé",
   [F(GLINET, SUB["deauth"], da="ff:ff:ff:ff:ff:ff") for _ in range(6)], True, True,
   piege="Un vendor 'ami' ne doit pas masquer une attaque dure (règle avant vendor).")
-S("P2", "PIÈGE évasion de seuil : permanent sonde 4 SSID (< seuil 5)",
+S("P2", "Permanent sonde 4 SSID → surveillance (seuil abaissé 5→4, déterministe)",
   [F(RPI, SUB["probe"], ssid=f"Z{i}") for i in range(4)], True, True,
-  piege="Juste sous le seuil surveillance — la règle ne tire pas, le LLM doit rattraper.")
+  piege="Auparavant sous le seuil (5) → laissé au LLM (flaky) ; désormais tranché par RÈGLE.")
 
 # --- LLM (cas ambigus) ---
 S("L1", "probe_tracking : permanent vise UN SSID précis + auth, signal fort",

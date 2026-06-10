@@ -67,7 +67,7 @@ un scénario par ligne**, plus les pièges et les bénins.
 | E1 | `deauth_attack` (broadcast) | ≥5 deauth vers `ff:ff:ff:ff:ff:ff` | RÈGLE | high | `_auto_classifier` |
 | E2 | `deauth_attack` (ciblé) | ≥3 deauth vers un client précis | RÈGLE | medium | `_auto_classifier` |
 | E3 | `handshake` | ≥2 trames EAPOL (4-way WPA) | RÈGLE | medium | `_auto_classifier` |
-| E4 | `surveillance` | MAC **permanente** sondant ≥5 SSID | RÈGLE | medium | `_auto_classifier` |
+| E4 | `surveillance` | MAC **permanente** sondant ≥4 SSID | RÈGLE | medium | `_auto_classifier` |
 | E5 | `probe_tracking` | MAC permanente visant 1 SSID précis + auth, signal fort | **LLM** | medium | qwen2.5:3b |
 | E6 | `over_secured` / `covert_ap` | Beacon WPA3+PMF+SSID masqué, signal très fort | **LLM** | medium/high | score beacon → LLM |
 | E7 | `evil_twin` | Nouveau BSSID usurpant un SSID **déjà établi** (multi-fenêtres) | **LLM** | medium/high | `RegistreAP` → LLM |
@@ -88,7 +88,7 @@ un scénario par ligne**, plus les pièges et les bénins.
 | # | Piège | Attendu |
 |---|---|---|
 | P1 | Vendor « ami » (GL.iNet) émet un **deauth** | **levé quand même** (règle avant vendor) |
-| P2 | Évasion de seuil : permanent sonde **4** SSID (< 5) | rattrapé par le **LLM** |
+| P2 | Permanent sonde **4** SSID | **hostile** (`surveillance`, RÈGLE — seuil abaissé 5→4) |
 | P3 | ESP/Espressif sonde activement | suspect (deauther bon marché probable) |
 | P4 | GL.iNet (infra domestique) sonde 6 SSID | **hostile** (`surveillance`) — toujours suspect, plus de mode |
 | MESH | Même SSID porté par ≥2 BSSID du **même** fabricant | **hostile** (`mesh`, déterministe) |
@@ -323,8 +323,8 @@ W("b3_assoc_domestique", [auth(PERM, signal=-70), assoc(PERM, "Livebox-2A30", si
 # Pièges
 W("p1_glinet_deauth", [deauth(GLINET, BCAST, -40) for _ in range(6)],
   {GLINET: {"interesting": True, "category": "deauth_attack", "label": "Ami fait un deauth"}})
-W("p2_evasion_seuil", [probe(RPI, f"Z{i}", -55) for i in range(4)],
-  {RPI: {"interesting": True, "category": None, "label": "Évasion seuil (4 SSID)"}})
+W("p2_surveillance_4ssid", [probe(RPI, f"Z{i}", -55) for i in range(4)],
+  {RPI: {"interesting": True, "category": "surveillance", "label": "Permanent sonde 4 SSID (surveillance, règle)"}})
 W("p3_esp_probe", [probe(ESP, "", -50) for _ in range(3)],
   {ESP: {"interesting": True, "category": None, "label": "ESP sonde (deauther ?)"}})
 W("m1_glinet_calib", [probe(GLINET, f"AP{i}", -55) for i in range(6)],
@@ -804,7 +804,7 @@ Convention projet : **après toute manip/test sur le UP², `capture.sh` et
 | deauth broadcast → high | ≥5 | `aggregateur.py` | sinon medium |
 | deauth ciblé → règle | ≥3 | `aggregateur.py` | en deçà : LLM |
 | handshake → règle | ≥2 EAPOL | `aggregateur.py` | |
-| surveillance → règle | ≥5 SSID, MAC permanente | `aggregateur.py` | seuil 4 = piège P2 (LLM) |
+| surveillance → règle | ≥4 SSID, MAC permanente | `aggregateur.py` | `SEUIL_SSID_SURVEILLANCE` (abaissé 5→4) |
 | score sur-sécurisation beacon | ≥3/12 → suspect | `prefilter.py` | WPA3=+3, PMF=+3, masqué=+2, GCMP256=+2, signal>-25=+2 |
 | persistance traqueur → LLM | ≥4 fenêtres | `traqueur.py` | filature |
 | diversité SSID traqueur → LLM | ≥5 SSID | `traqueur.py` | |

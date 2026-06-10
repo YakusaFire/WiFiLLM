@@ -212,7 +212,7 @@ Regroupe tous les candidats d'un pcap par **adresse MAC source**, construit une 
 | Deauth broadcast (`ff:ff:ff:ff:ff:ff`) | `deauth_attack` | medium / high (≥ 5 deauth) |
 | ≥ 3 deauthentifications ciblées | `deauth_attack` | medium |
 | ≥ 2 trames EAPOL | `handshake` | medium |
-| MAC permanent sondant ≥ 5 SSID distincts | `surveillance` | medium |
+| MAC permanent sondant ≥ 4 SSID distincts | `surveillance` | medium |
 
 Les cas non couverts par ces règles sont transmis au LLM avec la description comportementale complète (nombre de trames, types, SSIDs sondés, signal min/max, historique traqueur).
 

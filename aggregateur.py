@@ -8,7 +8,7 @@
 #               - Wildcard probes depuis MAC randomisé → ignoré (vie privée civile)
 #               - Deauth broadcast ou >= 3 deauth ciblées  → deauth_attack
 #               - >= 2 trames EAPOL                        → handshake
-#               - MAC permanent sondant >= 5 SSID          → surveillance
+#               - MAC permanent sondant >= 4 SSID          → surveillance
 #               Pour les cas ambigus, une description comportementale synthétique
 #               (types de trames, SSIDs sondés, signal, historique traqueur) est
 #               construite et renvoyée pour soumission au LLM.
@@ -27,6 +27,13 @@ from traqueur import Traqueur
 from registre_ap import RegistreAP
 from oui import fabricant, materiel_suspect, materiel_offensif
 from prefilter import score_securite_beacon, decoder_ssid, lire_canal
+
+# Nombre de SSID distincts sondés (dans une fenêtre) par une MAC PERMANENTE au-delà
+# duquel on conclut à une reconnaissance active (cartographie WiFi) de façon
+# DÉTERMINISTE. Abaissé de 5 à 4 : l'« évasion de seuil » à 4 SSID était auparavant
+# laissée au LLM (qwen2.5:3b), qui la ratait par intermittence (faux négatif, cf.
+# rapport_benchmark P2/§6.3). Une MAC permanente sondant ≥4 réseaux reste atypique.
+SEUIL_SSID_SURVEILLANCE = 4
 
 def _mac_est_randomise(mac: str) -> bool:
     try:
@@ -90,7 +97,7 @@ def _auto_classifier(mac: str, mac_randomise: bool, frames: list,
         }
 
     # MAC permanent scannant de nombreux réseaux : reconnaissance active
-    if not mac_randomise and n_probe > 0 and len(ssids) >= 5:
+    if not mac_randomise and n_probe > 0 and len(ssids) >= SEUIL_SSID_SURVEILLANCE:
         return {
             "interesting": True,
             "threat_level": "medium",
