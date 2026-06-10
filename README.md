@@ -107,7 +107,13 @@ Au démarrage (`start`), le script :
 1. Passe l'interface `wlx64d95401ebeb` en **mode monitor** via `iw dev`
 2. Crée les dossiers `/data/capture/{raw,done,interesting}` si absents
 3. Purge les `.pyc` pour forcer le rechargement du code Python
-4. Lance `capture.sh` et `pipeline.py` en arrière-plan avec `nohup`
+4. Lance `capture.sh` en arrière-plan avec `nohup`
+5. **Précharge le modèle LLM** (`precharger_modele` → `llm_analyzer.precharger`) :
+   une inférence à blanc complète qui charge les poids **et** amorce le KV-cache du
+   `SYSTEM_PROMPT`, en `keep_alive` permanent. Absorbe le cold-start (~80 s) AVANT
+   le trafic réel, sinon la 1ʳᵉ inférence dépasse le timeout de 60 s → premier
+   appareil ambigu raté (faux négatif silencieux). Ignoré si Ollama est injoignable.
+6. Lance `pipeline.py` en arrière-plan avec `nohup` (modèle déjà chaud)
 
 ---
 
@@ -310,6 +316,13 @@ Le `threat_level` jugé par le LLM est la **source de vérité**, pas la seule c
 - Catégories **molles** (`probe_tracking`, `surveillance`, `anomaly`) → `interesting=true` **uniquement si** `threat_level` ∈ {`medium`, `high`} ; sinon `false`
 - `normal` ou catégorie inconnue → `interesting=false`
 - En cas de timeout (> 60 s) ou d'erreur → `interesting=false`
+
+> **Cold-start maîtrisé.** Chaque requête fixe `keep_alive=-1` (modèle résident,
+> jamais déchargé), et `capteur.sh start` appelle `precharger()` pour préchauffer le
+> modèle avant le trafic. Sans cela, la 1ʳᵉ inférence après démarrage dépassait le
+> timeout de 60 s (chargement des poids + prefill du `SYSTEM_PROMPT` sur CPU) → le
+> premier appareil ambigu était classé bénin par timeout (faux négatif silencieux).
+> Une fois chaud, une inférence prend ~15–25 s sur le UP².
 
 > **Pourquoi cette logique** : forcer `interesting=true` sur la seule catégorie générait un fort taux de faux positifs sur le terrain — `qwen2.5:3b` sur-attribue `anomaly` à des MAC randomisés civils tout en les décrivant comme bénins. Faire piloter `interesting` par le `threat_level` corrige ça (cf. `rapport/rapport_plus_value_v1.md` → `v2.md`).
 

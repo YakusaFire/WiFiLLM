@@ -25,6 +25,12 @@ import json
 OLLAMA_URL = "http://localhost:11434/api/generate"
 MODEL = "qwen2.5:3b"
 
+# Garde le modèle résident en mémoire entre les inférences (et après un préchargement).
+# -1 = indéfiniment : évite qu'Ollama décharge le modèle après son keep_alive par
+# défaut (5 min d'inactivité), ce qui re-provoquerait un cold-start > 60s → timeout
+# → faux négatif silencieux sur l'appareil suivant (cf. rapport_benchmark P2/§6.2).
+KEEP_ALIVE = -1
+
 CATEGORIES_SUSPECTES = {
     "deauth_attack", "probe_tracking", "handshake",
     "over_secured", "covert_ap", "surveillance",
@@ -76,6 +82,7 @@ def analyser(description: str) -> dict:
         "prompt": description,
         "stream": False,
         "format": "json",
+        "keep_alive": KEEP_ALIVE,
         "options": {
             "temperature": 0.1,
             # Plafond de tokens (pas une cible : avec format=json, le modèle
@@ -118,3 +125,38 @@ def analyser(description: str) -> dict:
         return {"interesting": False, "threat_level": "none", "category": "normal", "reason": "timeout LLM"}
     except Exception as e:
         return {"interesting": False, "threat_level": "none", "category": "normal", "reason": f"erreur: {e}"}
+
+
+def precharger(timeout: int = 240) -> bool:
+    """Préchauffe COMPLÈTEMENT le modèle au démarrage du capteur pour absorber le
+    cold-start avant le trafic réel. Charger les seuls poids ne suffit pas : la 1re
+    inférence paie aussi le PREFILL CPU du long SYSTEM_PROMPT (~60s, > timeout),
+    alors que les suivantes réutilisent le KV-cache de ce préfixe (~20s). On fait
+    donc ici une inférence à blanc COMPLÈTE (même system prompt), avec keep_alive
+    permanent, afin que la 1re VRAIE inférence soit déjà chaude. Timeout généreux
+    (le 1er appel est lent par nature). Retourne True si le modèle a répondu.
+    Usage shell : python3 /root/llm_analyzer.py
+    """
+    payload = {
+        "model": MODEL,
+        "system": SYSTEM_PROMPT,
+        "prompt": "Appareil 00:00:00:00:00:00 (MAC PERMANENT) — 1 trame en 30s.",
+        "stream": False,
+        "format": "json",
+        "keep_alive": KEEP_ALIVE,
+        "options": {"temperature": 0.1, "num_predict": 256},
+    }
+    try:
+        r = requests.post(OLLAMA_URL, json=payload, timeout=timeout)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return False
+
+
+if __name__ == "__main__":
+    # Lancé directement → précharge le modèle (utilisé par capteur.sh start).
+    import sys
+    ok = precharger()
+    print(f"Modèle {MODEL} préchargé : {'OK' if ok else 'ÉCHEC'}")
+    sys.exit(0 if ok else 1)

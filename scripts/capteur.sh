@@ -34,6 +34,23 @@ TRAMES_DEST="${TRAMES_DEST:-2039nngy@100.64.115.128:/home/2039nngy/Documents/PRO
 TRAMES_SSH_KEY="${TRAMES_SSH_KEY:-/root/.ssh/trames_push}"
 export TRAMES_DEST TRAMES_SSH_KEY
 
+precharger_modele() {
+    # Charge le modèle LLM AVANT le trafic réel pour absorber le cold-start
+    # (chargement Ollama > 60s) qui, sinon, ferait timeouter — donc rater — le
+    # tout premier appareil ambigu après un (re)démarrage. keep_alive permanent
+    # (cf. llm_analyzer.precharger) → le modèle reste résident ensuite.
+    echo "  Préchargement du modèle LLM (absorbe le cold-start)..."
+    if ! curl -s -o /dev/null -m 3 localhost:11434/api/tags; then
+        echo "  ⚠ Ollama injoignable — préchargement ignoré (1er cas ambigu = risque de timeout)."
+        return
+    fi
+    if python3 /root/llm_analyzer.py; then
+        echo "  Modèle préchargé et épinglé en mémoire."
+    else
+        echo "  ⚠ Préchargement échoué — le 1er cas ambigu pourrait timeouter."
+    fi
+}
+
 start() {
     if pgrep -f "pipeline.py" > /dev/null; then
         echo "Déjà en cours d'exécution."
@@ -63,6 +80,10 @@ start() {
     nohup bash /root/capture.sh > "$LOG_CAPTURE" 2>&1 &
     echo $! > "$PID_DIR/capteur_capture.pid"
     sleep 2
+
+    # Précharge le modèle pendant que la capture remplit sa 1re fenêtre (30s),
+    # de sorte que la pipeline démarre sur un modèle déjà chaud.
+    precharger_modele
 
     # Lance la pipeline
     nohup python3 /root/pipeline.py > "$LOG_PIPELINE" 2>&1 &
