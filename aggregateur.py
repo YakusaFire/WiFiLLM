@@ -25,7 +25,7 @@
 from collections import defaultdict
 from traqueur import Traqueur
 from registre_ap import RegistreAP
-from oui import fabricant, infra_connue, materiel_suspect_zone
+from oui import fabricant, infra_connue, materiel_suspect_zone, materiel_offensif
 from prefilter import score_securite_beacon, decoder_ssid, lire_canal
 
 def _mac_est_randomise(mac: str) -> bool:
@@ -96,6 +96,19 @@ def _auto_classifier(mac: str, mac_randomise: bool, frames: list,
             "threat_level": "medium",
             "category": "surveillance",
             "reason": f"MAC permanent ({mac}) sonde {len(ssids)} réseaux distincts en 30s — cartographie WiFi active."
+        }
+
+    # Matériel typiquement offensif (ESP deauther) en activité (sonde/auth/assoc).
+    # Les deauth/handshake sont déjà tranchés plus haut ; ici on attrape le cas
+    # ESP-qui-sonde, que le LLM ratait en hallucinant une catégorie "module_iot"
+    # hors-contrat → faux négatif (cf. rapport_benchmark_v1 P3). Verdict déterministe.
+    if materiel_offensif(mac) and (n_probe or n_auth):
+        return {
+            "interesting": True,
+            "threat_level": "medium",
+            "category": "surveillance",
+            "reason": f"Matériel typiquement offensif ({fabricant(mac)}) en sondage actif "
+                      f"({n_probe} probe(s)) — deauther/outil d'attaque bon marché probable."
         }
 
     return None  # cas ambigu → LLM

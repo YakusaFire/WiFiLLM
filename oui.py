@@ -43,6 +43,15 @@ FABRICANTS_SITE = (
     "Sagemcom",          # box internet
 )
 
+# Fabricants de matériel typiquement utilisé comme OUTIL D'ATTAQUE WiFi, quel que
+# soit le mode : un module ESP8266/ESP32 (Espressif) qui sonde ou deauth est, dans
+# le modèle de menace du projet, un deauther/outil d'attaque bon marché. Verdict
+# déterministe (le petit LLM hallucinait une catégorie hors-contrat "module_iot"
+# → retombait bénin : faux négatif, cf. rapport_benchmark_v1 P3).
+FABRICANTS_OUTILS = (
+    "Espressif",         # ESP8266/ESP32 — deauthers, firmwares d'attaque répandus
+)
+
 
 def _charger() -> dict:
     global _cache
@@ -102,3 +111,8 @@ def infra_connue(mac: str) -> bool:
 def materiel_suspect_zone(mac: str) -> bool:
     """Matériel maison repéré EN ZONE (suspect) — seulement en mode terrain."""
     return MODE == "terrain" and _fab_dans(mac, FABRICANTS_SITE)
+
+
+def materiel_offensif(mac: str) -> bool:
+    """Matériel typiquement offensif (ESP deauther…), suspect dans TOUS les modes."""
+    return _fab_dans(mac, FABRICANTS_OUTILS)
