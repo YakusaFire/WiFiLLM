@@ -76,7 +76,7 @@ Antenne WiFi (mode monitor)
 | `aggregateur.py` | Agrégation par MAC + classification automatique sans LLM |
 | `traqueur.py` | Traqueur inter-pcap — historique de persistance des appareils (RAM) |
 | `registre_ap.py` | Registre **persistant** des AP (carte SSID→BSSID) — détection d'evil twin |
-| `oui.py` | Résolution OUI → fabricant (base `manuf` de Wireshark) + mode calibration/terrain |
+| `oui.py` | Résolution OUI → fabricant (base `manuf` de Wireshark) + familles suspectes (infra domestique, outils d'attaque) |
 | `llm_analyzer.py` | Interface Ollama — prompt + parsing de la réponse JSON |
 | `extractor.py` | Extraction des trames retenues dans un pcap + JSON d'analyse |
 | `envoi_trames.py` | Push scp **UP²→PC** du pcap filtré + JSON vers `trames/`, à l'événement (déclenché par `pipeline.py` après extraction) |
@@ -222,7 +222,7 @@ Si un appareil à MAC randomisé serait normalement ignoré mais que le `Traqueu
 
 **Interaction avec le registre AP (evil twin) :**
 
-Pour chaque beacon, le BSSID (= MAC source de l'AP) et son SSID sont enregistrés dans `registre_ap.py`. Si le registre retourne le statut `conflit` (nouveau BSSID sur un SSID déjà connu), le cas est **escaladé au LLM** avec la **comparaison des AP** ajoutée à la description — cela prime sur l'apaisement `infra_connue`, comme une attaque dure. Un beacon ordinaire sans conflit ni sur-sécurisation est classé **bénin** de façon déterministe (il alimente le registre mais n'atteint pas le LLM).
+Pour chaque beacon, le BSSID (= MAC source de l'AP) et son SSID sont enregistrés dans `registre_ap.py`. Deux verdicts AP en découlent : **(1) mesh** — si le SSID est porté par ≥2 BSSID du **même** fabricant (`infos_mesh()`), c'est un réseau mesh/multi-AP, levé **suspect de façon déterministe** (catégorie `mesh`, sans LLM) ; **(2) evil twin** — si le registre retourne le statut `conflit` (nouveau BSSID, vendor *différent*, sur un SSID déjà connu), le cas est **escaladé au LLM** avec la **comparaison des AP**. Le `mesh` est tranché **avant** l'evil twin (même vendor ⇒ mesh, pas imposteur). Un beacon ordinaire (mono-BSSID, ni sur-sécurisé) est classé **bénin** de façon déterministe.
 
 ---
 
@@ -264,7 +264,7 @@ Pendant **persistant sur disque** du traqueur, dédié aux points d'accès. Là 
 | `purger(max_age_jours)` | Oublie les BSSID inactifs depuis > 14 jours |
 | `charger()` / `sauver()` | Persistance JSON atomique (`/data/capture/registre_ap.json`) |
 
-**Statut `conflit`** = ce SSID a ≥ 2 BSSID distincts **et** le BSSID courant est un *nouveau venu* (vu sur ≤ 2 fenêtres). Ce critère couvre le cas réaliste (référence ancienne + pirate récent) comme le démarrage à froid (deux AP découverts dans la même fenêtre, le LLM tranchant alors sur signal/sécurité/vendor). Un réseau **mesh/multi-AP légitime**, une fois ses BSSID stabilisés, repasse en `connu` et ne ré-escalade plus (anti-bruit). Les **SSID masqués** ne sont pas indexés (un evil twin imite un SSID *visible* ; le masqué reste géré par `over_secured`).
+**Statut `conflit`** = ce SSID a ≥ 2 BSSID distincts **et** le BSSID courant est un *nouveau venu* (vu sur ≤ 2 fenêtres). Ce critère couvre le cas réaliste (référence ancienne + pirate récent) comme le démarrage à froid (deux AP découverts dans la même fenêtre, le LLM tranchant alors sur signal/sécurité/vendor). **Détection mesh** (`infos_mesh()`) : si ≥ 2 BSSID d'un même SSID partagent le **même fabricant** (OUI), c'est un réseau mesh/multi-AP — levé **suspect** (catégorie `mesh`), distinct de l'evil twin (vendor *différent*). En posture terrain, une infra multi-AP est inhabituelle donc suspecte (le cas « mesh légitime bénin » des versions antérieures est désormais signalé). Les **SSID masqués** ne sont pas indexés (un evil twin imite un SSID *visible* ; le masqué reste géré par `over_secured`).
 
 ---
 
@@ -279,14 +279,16 @@ Donne le **fabricant** d'une MAC à partir de son **OUI** (les 3 premiers octets
 Intérêt clé : même si l'attaquant **spoofe/randomise sa propre source**, les autres MAC de la trame (victime, AP) restent exploitables.
 
 - Ne résout que les **MAC permanentes** : une MAC randomisée (bit `0x02`) a un OUI bidon → retourne `None`.
-- **Mode d'emploi** (variable d'env `CAPTEUR_MODE`, défaut `calibration`) :
+- **Posture terrain unique** (les modes `calibration`/`terrain` ont été retirés) :
 
-| Mode | Matériel maison (`FABRICANTS_SITE` : GL.iNet, Sagemcom…) |
+| Famille de fabricant | Traitement |
 |---|---|
-| `calibration` | Atelier/bureau → **bénin** : `[équipement habituel du site]` (évite les faux positifs sur sa propre flotte) |
-| `terrain` | Capteur déposé en zone, passif → **suspect** : `[matériel … suspect en zone opérationnelle]` (matériel adverse probable) |
+| `FABRICANTS_SITE` (GL.iNet, Sagemcom…) — `materiel_suspect()` | Infra domestique en zone → **suspect** : `[matériel d'infrastructure domestique — suspect en zone opérationnelle]` |
+| `FABRICANTS_OUTILS` (Espressif…) — `materiel_offensif()` | Outil d'attaque probable (deauther ESP) en sondage → **suspect** (règle déterministe) |
 
-> Dans les deux modes, un `deauth`/`handshake` émis par ces équipements reste détecté par les règles déterministes — le mode ne joue que sur le jugement « mou » du LLM. Pour déployer en zone : `CAPTEUR_MODE=terrain`.
+> Le capteur est conçu pour être déposé en zone : tout matériel d'infrastructure
+> domestique y est, par principe, suspect (plus de mode « bureau »). Un `deauth`/
+> `handshake` reste de toute façon détecté par les règles déterministes.
 
 ---
 
@@ -307,6 +309,7 @@ Envoie la description comportementale agrégée d'un appareil à Ollama (`qwen2.
 | `covert_ap` | Point d'accès clandestin |
 | `surveillance` | Balayage actif de probes ou comportement de surveillance |
 | `anomaly` | Comportement 802.11 anormal non classifié |
+| `mesh` | Réseau mesh / multi-AP (même SSID, ≥2 BSSID du **même** fabricant) — infra inhabituelle en zone. Détecté **déterministe-ment** par `registre_ap.infos_mesh()`, jamais via le LLM |
 
 **Logique `interesting` après réponse du LLM :**
 
@@ -417,7 +420,7 @@ Exemple de log pipeline :
 ├── aggregateur.py    ← agrégation comportementale par MAC
 ├── traqueur.py       ← mémoire inter-pcap des appareils (RAM)
 ├── registre_ap.py    ← registre persistant SSID→BSSID (détection evil twin)
-├── oui.py            ← résolution OUI → fabricant + mode calibration/terrain
+├── oui.py            ← résolution OUI → fabricant + familles suspectes (infra/outils)
 ├── llm_analyzer.py   ← interface LLM
 ├── extractor.py      ← extraction des résultats
 ├── envoi_trames.py   ← push scp UP²→PC des trames intéressantes vers trames/

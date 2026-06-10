@@ -163,6 +163,38 @@ class RegistreAP:
         )
         return " ".join(lignes)
 
+    # -------------------------------------------------------------- mesh
+    def infos_mesh(self, ssid: str) -> dict | None:
+        """
+        Détecte un réseau MESH / multi-AP : un même SSID annoncé par ≥2 BSSID
+        partageant le MÊME fabricant (kit mesh grand public ou infrastructure :
+        Eero, Orbi, Deco, AP d'entreprise…). C'est la signature qui DISTINGUE le
+        mesh de l'evil twin (lequel a typiquement un vendor/sécurité DIFFÉRENTS).
+
+        En posture terrain, un réseau mesh est inhabituel donc suspect.
+
+        Retourne {vendor, n_bssid, bssids, canaux} si mesh détecté, sinon None.
+        """
+        aps = self._aps.get(ssid, {})
+        if len(aps) < 2:
+            return None
+        # Regroupe les BSSID par fabricant (OUI résolu, non vide).
+        par_vendor: dict[str, list] = {}
+        for bssid, e in aps.items():
+            v = e.get("vendor")
+            if v:
+                par_vendor.setdefault(v, []).append(bssid)
+        for vendor, bssids in par_vendor.items():
+            if len(bssids) >= 2:
+                canaux = sorted({str(aps[b].get("canal") or "?") for b in bssids})
+                return {
+                    "vendor":  vendor,
+                    "n_bssid": len(bssids),
+                    "bssids":  sorted(bssids),
+                    "canaux":  canaux,
+                }
+        return None
+
     # -------------------------------------------------------------- entretien
     def purger(self, max_age_jours: int = MAX_AGE_JOURS) -> None:
         """Oublie les BSSID inactifs depuis > max_age_jours, puis les SSID vidés."""

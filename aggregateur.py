@@ -25,7 +25,7 @@
 from collections import defaultdict
 from traqueur import Traqueur
 from registre_ap import RegistreAP
-from oui import fabricant, infra_connue, materiel_suspect_zone, materiel_offensif
+from oui import fabricant, materiel_suspect, materiel_offensif
 from prefilter import score_securite_beacon, decoder_ssid, lire_canal
 
 def _mac_est_randomise(mac: str) -> bool:
@@ -191,10 +191,8 @@ def agreger(candidats: list, traqueur: Traqueur | None = None,
         fab = fabricant(mac)
         if not fab:
             fab_txt = ""
-        elif infra_connue(mac):
-            fab_txt = f", fabricant: {fab} [équipement habituel du site]"
-        elif materiel_suspect_zone(mac):
-            fab_txt = f", fabricant: {fab} [matériel type routeur portable — suspect en zone opérationnelle]"
+        elif materiel_suspect(mac):
+            fab_txt = f", fabricant: {fab} [matériel d'infrastructure domestique — suspect en zone opérationnelle]"
         else:
             fab_txt = f", fabricant: {fab}"
         parties = [f"Appareil {mac} ({mac_label}{fab_txt}) — {len(frames)} trame(s) en 30s"]
@@ -290,40 +288,48 @@ def agreger(candidats: list, traqueur: Traqueur | None = None,
                     "reason": eval_traqueur["raison"],
                 }
 
-        # --- Verdict evil_twin : confié au LLM ---
-        # Un nouveau BSSID usurpe un SSID déjà connu → on escalade avec la
-        # COMPARAISON des AP (antériorité, signal, sécurité, vendor, canal) et
-        # on laisse le LLM désigner l'imposteur. Comme une attaque dure, ça
-        # prime sur l'apaisement infra_connue ci-dessous.
+        # --- Verdicts AP : evil_twin (LLM) puis mesh (déterministe) ---
+        # 1) evil_twin : un NOUVEAU BSSID usurpe un SSID déjà connu (vendor/sécurité
+        #    typiquement DIFFÉRENTS) → escalade avec la COMPARAISON des AP, le LLM
+        #    désigne l'imposteur. Prime sur tout le reste (attaque en cours).
+        # 2) mesh : un même SSID porté par ≥2 BSSID du MÊME fabricant (kit mesh /
+        #    multi-AP). Inhabituel en zone → suspect, verdict DÉTERMINISTE (pas de
+        #    LLM). Distinct de l'evil_twin par le critère "même vendor".
         escalade_evil_twin = (statut_registre == "conflit")
-        if escalade_evil_twin:
+        infos_mesh = (registre.infos_mesh(ssid_ap)
+                      if (registre is not None and ssid_ap) else None)
+
+        # MESH d'abord : si ≥2 BSSID du MÊME fabricant portent ce SSID, c'est un
+        # mesh/multi-AP, pas un evil twin (lequel a un vendor différent). Le
+        # registre marque pourtant le 2e BSSID "conflit" (il ignore le vendor) ;
+        # on tranche donc le mesh AVANT l'escalade evil_twin pour ne pas l'envoyer
+        # à tort au LLM. Un vrai evil twin (vendor différent) → infos_mesh=None →
+        # retombe sur l'escalade ci-dessous.
+        if n_beacon and infos_mesh is not None and (auto is None or not auto["interesting"]):
+            canaux = ", ".join(infos_mesh["canaux"])
+            auto = {
+                "interesting": True,
+                "threat_level": "medium",
+                "category": "mesh",
+                "reason": (f"Réseau mesh détecté : '{ssid_ap}' annoncé par "
+                           f"{infos_mesh['n_bssid']} BSSID du même fabricant "
+                           f"({infos_mesh['vendor']}, canal/aux {canaux}) — infrastructure "
+                           f"multi-AP inhabituelle en zone, probablement adverse."),
+            }
+
+        elif escalade_evil_twin:
             comparaison = registre.description_comparative(ssid_ap)
             description = f"{description} {comparaison}".strip()
             auto = None
 
-        # On remonte désormais TOUS les beacons (pour alimenter le registre),
-        # mais un AP civil banal — ni sur-sécurisé, ni en conflit de SSID — ne
-        # doit pas inonder le LLM : on le classe bénin de façon déterministe.
+        # Beacon ordinaire (1 seul BSSID, ni sur-sécurisé, ni conflit, ni mesh) :
+        # classé bénin de façon déterministe pour ne pas inonder le LLM.
         elif n_beacon and auto is None and not (beacon_masque or beacon_score >= 3):
             auto = {
                 "interesting": False,
                 "threat_level": "none",
                 "category": "normal",
                 "reason": "Beacon AP ordinaire — enregistré au registre, aucun conflit de SSID.",
-            }
-
-        # En mode calibration, le matériel d'infrastructure connu du site
-        # (FABRICANTS_SITE via oui.py) est traité comme bénin de façon
-        # DÉTERMINISTE — SAUF attaque dure (deauth/handshake) ou conflit
-        # evil_twin, qui restent levés. (Le simple indice de prompt ne suffisait
-        # pas à brider le LLM : cf. rapport batterie v1, faux positifs M1/M3.)
-        if (not escalade_evil_twin and infra_connue(mac)
-                and (auto is None or auto.get("category") not in ("deauth_attack", "handshake"))):
-            auto = {
-                "interesting": False,
-                "threat_level": "none",
-                "category": "normal",
-                "reason": f"Équipement habituel du site ({fab}) — non hostile en calibration.",
             }
 
         agregats.append({

@@ -22,6 +22,8 @@ ROGUE  = "00:de:ad:be:ef:00"   # AP pirate (evil twin)
 PHONE1 = "da:a1:19:7c:00:01"   # randomisé (bit 0x02) — vie privée
 PHONE2 = "c6:2b:88:40:11:02"   # randomisé
 FILAT  = "ee:88:c1:7f:33:44"   # randomisé MAIS persistant → filature
+MESH_A = "80:20:da:11:11:11"   # Sagemcom — nœud mesh A
+MESH_B = "80:20:da:22:22:22"   # Sagemcom — nœud mesh B (MÊME fabricant → mesh)
 
 def rt(signal):
     """RadioTap avec dBm_AntSignal renseigné (→ radiotap.dbm_antsignal)."""
@@ -80,11 +82,12 @@ def bruit_civil():
     return [probe(PHONE1, "", -58), probe(PHONE2, "Maison_5G", -61),
             beacon("80:20:da:bb:bb:bb", "Livebox-2A30", channel=6, signal=-65)]
 
-# --- Construction du corpus : (nom_pcap, [trames], {mac: attendu}, mode) ------
+# --- Construction du corpus : (nom_pcap, [trames], {mac: attendu}) ------------
 # attendu = {"interesting": bool, "category": str|None, "label": str}
+# (Le capteur opère toujours en posture terrain — plus de mode calibration.)
 WINDOWS = []
-def W(nom, trames, attendu, mode="calibration"):
-    WINDOWS.append({"pcap": nom, "trames": trames, "attendu": attendu, "mode": mode})
+def W(nom, trames, attendu):
+    WINDOWS.append({"pcap": nom, "trames": trames, "attendu": attendu})
 
 # E1 deauth broadcast (×8)
 W("e1_deauth_broadcast", [deauth(PERM, BCAST, -38) for _ in range(8)] + bruit_civil(),
@@ -134,10 +137,21 @@ W("p2_evasion_seuil", [probe(RPI, f"Z{i}", -55) for i in range(4)],
   {RPI: {"interesting": True, "category": None, "label": "Évasion seuil (4 SSID)"}})
 W("p3_esp_probe", [probe(ESP, "", -50) for _ in range(3)],
   {ESP: {"interesting": True, "category": None, "label": "ESP sonde (deauther ?)"}})
-W("m1_glinet_calib", [probe(GLINET, f"AP{i}", -55) for i in range(6)],
-  {GLINET: {"interesting": False, "category": "normal", "label": "GL.iNet 6 SSID (calib)"}}, mode="calibration")
-W("m2_glinet_terrain", [probe(GLINET, f"AP{i}", -55) for i in range(6)],
-  {GLINET: {"interesting": True, "category": None, "label": "GL.iNet 6 SSID (terrain)"}}, mode="terrain")
+W("p4_glinet_zone", [probe(GLINET, f"AP{i}", -55) for i in range(6)],
+  {GLINET: {"interesting": True, "category": None, "label": "GL.iNet (infra domestique) sonde 6 SSID"}})
+
+# MESH : 2 AP même SSID, MÊME fabricant (Sagemcom) — infra multi-AP, suspect en
+# zone (catégorie déterministe 'mesh'). Multi-fenêtres : en 1re fenêtre, le 2e AP
+# traité est levé (le 1er n'a pas encore de jumeau au registre) ; en régime établi
+# (fenêtre suivante), les DEUX sont levés.
+W("mesh_1_2ap", [beacon(MESH_A, "Bureau_Mesh", channel=6, signal=-55),
+                 beacon(MESH_B, "Bureau_Mesh", channel=11, signal=-58)],
+  {MESH_B: {"interesting": True,  "category": "mesh",   "label": "Mesh nœud B (1re fenêtre)"},
+   MESH_A: {"interesting": False, "category": "normal", "label": "Mesh nœud A (bénin 1re fenêtre)"}})
+W("mesh_2_2ap", [beacon(MESH_A, "Bureau_Mesh", channel=6, signal=-55),
+                 beacon(MESH_B, "Bureau_Mesh", channel=11, signal=-58)],
+  {MESH_A: {"interesting": True, "category": "mesh", "label": "Mesh nœud A (régime établi)"},
+   MESH_B: {"interesting": True, "category": "mesh", "label": "Mesh nœud B (régime établi)"}})
 
 # Filature : même MAC randomisée sur 4 fenêtres → escalade traqueur, doit rester bénin
 for i in range(1, 5):
@@ -149,7 +163,7 @@ manifest = []
 for w in WINDOWS:
     chemin = os.path.join(OUT, w["pcap"] + ".pcap")
     wrpcap(chemin, w["trames"])
-    manifest.append({"pcap": w["pcap"] + ".pcap", "attendu": w["attendu"], "mode": w["mode"]})
+    manifest.append({"pcap": w["pcap"] + ".pcap", "attendu": w["attendu"]})
 
 with open(os.path.join(OUT, "manifest.json"), "w") as f:
     json.dump(manifest, f, indent=2, ensure_ascii=False)

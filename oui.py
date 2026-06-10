@@ -26,18 +26,14 @@ _MANUF_PATHS = [
 
 _cache = None  # dict {OUI 'XX:XX:XX' majuscule -> nom fabricant}
 
-# MODE D'EMPLOI DU CAPTEUR (variable d'env CAPTEUR_MODE) :
-#   "calibration" — au bureau/atelier : le matériel maison (GL.iNet, box…) est
-#                   ATTENDU → traité comme bénin (évite les faux positifs).
-#   "terrain"     — capteur déposé en zone, passif : ce MÊME matériel n'a rien
-#                   à faire là → devient potentiellement HOSTILE → suspect.
-MODE = os.environ.get("CAPTEUR_MODE", "calibration").lower()
+# Le capteur opère TOUJOURS en posture "terrain" (déposé en zone, passif) : il n'y
+# a plus de mode "calibration". Tout matériel d'infrastructure domestique repéré
+# en zone est, par principe, potentiellement adverse → suspect.
 
-# Fabricants du matériel "maison" / d'infrastructure de référence.
-# En calibration : bénins. En terrain : suspects (matériel adverse probable).
-# NB : dans les deux cas, un deauth/handshake émis par ces équipements reste
-# détecté par les règles déterministes de aggregateur.py — ce switch ne joue
-# que sur le jugement "mou" du LLM.
+# Fabricants de matériel "maison" / d'infrastructure domestique (box, routeurs
+# portables). En zone opérationnelle, leur présence est anormale → suspecte.
+# NB : un deauth/handshake émis par ces équipements reste de toute façon détecté
+# par les règles déterministes de aggregateur.py.
 FABRICANTS_SITE = (
     "GL Technologies",   # GL.iNet — routeurs portables
     "Sagemcom",          # box internet
@@ -103,16 +99,12 @@ def _fab_dans(mac: str, liste) -> bool:
     return bool(fab) and any(k.lower() in fab.lower() for k in liste)
 
 
-def infra_connue(mac: str) -> bool:
-    """Équipement maison ATTENDU (bénin) — seulement en mode calibration."""
-    return MODE == "calibration" and _fab_dans(mac, FABRICANTS_SITE)
-
-
-def materiel_suspect_zone(mac: str) -> bool:
-    """Matériel maison repéré EN ZONE (suspect) — seulement en mode terrain."""
-    return MODE == "terrain" and _fab_dans(mac, FABRICANTS_SITE)
+def materiel_suspect(mac: str) -> bool:
+    """Matériel d'infrastructure domestique (box, routeur portable) repéré en zone
+    → suspect (le capteur opère toujours en posture terrain)."""
+    return _fab_dans(mac, FABRICANTS_SITE)
 
 
 def materiel_offensif(mac: str) -> bool:
-    """Matériel typiquement offensif (ESP deauther…), suspect dans TOUS les modes."""
+    """Matériel typiquement offensif (ESP deauther…), toujours suspect."""
     return _fab_dans(mac, FABRICANTS_OUTILS)

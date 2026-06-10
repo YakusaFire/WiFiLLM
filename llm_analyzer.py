@@ -34,7 +34,7 @@ KEEP_ALIVE = -1
 CATEGORIES_SUSPECTES = {
     "deauth_attack", "probe_tracking", "handshake",
     "over_secured", "covert_ap", "surveillance",
-    "evil_twin", "anomaly"
+    "evil_twin", "anomaly", "mesh"
 }
 
 # Catégories d'attaque "dures" : nécessitent une preuve technique spécifique
@@ -43,7 +43,7 @@ CATEGORIES_SUSPECTES = {
 # Les autres catégories ("anomaly", "probe_tracking", "surveillance",
 # "over_secured") sont sur-attribuées par le petit modèle à des appareils
 # civils → on ne les force PAS, on suit le threat_level réel.
-CATEGORIES_GRAVES = {"deauth_attack", "handshake", "evil_twin", "covert_ap", "over_secured"}
+CATEGORIES_GRAVES = {"deauth_attack", "handshake", "evil_twin", "covert_ap", "over_secured", "mesh"}
 
 SYSTEM_PROMPT = """Tu es un capteur WiFi tactique embarqué. Tu reçois le résumé comportemental d'un appareil observé en 30 secondes. Ta mission : déterminer si cet appareil est potentiellement hostile, opérationnel (militaire, renseignement, attaquant) ou simplement civil banal.
 
@@ -73,7 +73,9 @@ COMPORTEMENTS CIVILS BANALS (interesting=false, catégorie=normal) :
 threat_level doit être : "none", "low", "medium", ou "high". Ne jamais utiliser "normal".
 
 Réponds UNIQUEMENT en JSON valide :
-{"interesting": true/false, "threat_level": "none|low|medium|high", "category": "normal|handshake|deauth_attack|probe_tracking|evil_twin|covert_ap|surveillance|over_secured|anomaly", "reason": "une phrase factuelle et précise"}"""
+{"interesting": true/false, "threat_level": "none|low|medium|high", "category": "normal|handshake|deauth_attack|probe_tracking|evil_twin|covert_ap|surveillance|over_secured|anomaly|mesh", "reason": "une phrase factuelle et précise"}
+
+NB : la catégorie "mesh" (même SSID porté par plusieurs AP du même fabricant = réseau mesh/multi-AP, inhabituel en zone) est attribuée DÉTERMINISTE-MENT en amont — tu n'as normalement pas à la produire."""
 
 def analyser(description: str) -> dict:
     payload = {

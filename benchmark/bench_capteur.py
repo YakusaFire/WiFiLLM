@@ -5,7 +5,6 @@
 import os, sys, json, time, tempfile, argparse, statistics
 
 sys.path.insert(0, "/root")                # modules de prod : pipeline & co
-import oui
 from prefilter import filtrer_pcap
 from aggregateur import agreger
 from llm_analyzer import analyser
@@ -29,7 +28,6 @@ def run(no_llm=False):
     resultats, latences = [], []
 
     for win in manifest:
-        oui.MODE = win["mode"]
         pcap = os.path.join(CORPUS, win["pcap"])
         registre.nouvelle_fenetre()
 
@@ -205,10 +203,10 @@ def ecrire_rapport_md(cold, resultats, latences, no_llm, chemin):
     L.append("| Capacité | État |")
     L.append("|---|---|")
     caps = [("Attaques dures (deauth/handshake)", ["e1", "e2", "e3", "p1"]),
-            ("Surveillance / reconnaissance", ["e4", "p2", "p3"]),
+            ("Surveillance / reconnaissance", ["e4", "p2", "p3", "p4"]),
             ("AP furtif / over-secured", ["e6"]),
             ("Evil twin (registre persistant)", ["e7"]),
-            ("Modes calibration/terrain", ["m1", "m2"]),
+            ("Réseau mesh / multi-AP", ["mesh"]),
             ("Faux positifs zone grise", ["b3"])]
     for nom, prefixes in caps:
         lignes = [r for r in resultats if any(r["pcap"].startswith(p) for p in prefixes)]

@@ -72,6 +72,7 @@ un scénario par ligne**, plus les pièges et les bénins.
 | E6 | `over_secured` / `covert_ap` | Beacon WPA3+PMF+SSID masqué, signal très fort | **LLM** | medium/high | score beacon → LLM |
 | E7 | `evil_twin` | Nouveau BSSID usurpant un SSID **déjà établi** (multi-fenêtres) | **LLM** | medium/high | `RegistreAP` → LLM |
 | E8 | `anomaly` | Comportement atypique non couvert ci-dessus | **LLM** | variable | qwen2.5:3b |
+| E9 | `mesh` | Même SSID porté par ≥2 BSSID du **même** fabricant (multi-fenêtres) | RÈGLE | medium | `RegistreAP.infos_mesh` |
 | — | **Filature** (randomisé persistant) | MAC randomisée revue ≥4 fenêtres | **LLM** (via traqueur) | doit rester **bénin** (cf. TR1) | `Traqueur` |
 
 **Bénins** (ne DOIVENT PAS lever d'alerte — mesure des faux positifs) :
@@ -89,8 +90,13 @@ un scénario par ligne**, plus les pièges et les bénins.
 | P1 | Vendor « ami » (GL.iNet) émet un **deauth** | **levé quand même** (règle avant vendor) |
 | P2 | Évasion de seuil : permanent sonde **4** SSID (< 5) | rattrapé par le **LLM** |
 | P3 | ESP/Espressif sonde activement | suspect (deauther bon marché probable) |
-| M1 | GL.iNet sonde 6 SSID en **calibration** | **bénin** (infra du site) |
-| M2 | GL.iNet sonde 6 SSID en **terrain** | **hostile** |
+| P4 | GL.iNet (infra domestique) sonde 6 SSID | **hostile** (`surveillance`) — toujours suspect, plus de mode |
+| MESH | Même SSID porté par ≥2 BSSID du **même** fabricant | **hostile** (`mesh`, déterministe) |
+
+> **Posture terrain unique.** Les modes `calibration`/`terrain` ont été retirés : le
+> matériel d'infrastructure domestique (GL.iNet, Sagemcom) est toujours suspect, et
+> un réseau **mesh** (catégorie `mesh`) est levé déterministe-ment (cf.
+> `rapport/rapport_benchmark_v3.md`).
 
 > Ces scénarios sont déjà éprouvés en synthétique dans `tests/test_batterie.py` ;
 > le benchmark les rejoue **en vrais pcap** (donc en passant par tshark) et ajoute
@@ -157,16 +163,21 @@ $SSH 'curl -s localhost:11434/api/generate -d "{\"model\":\"qwen2.5:3b\",\"promp
 #    c'est géré dans le script (RegistreAP(chemin=...)). Rien à faire ici.
 ```
 
-Le **mode** (`CAPTEUR_MODE`) est piloté par scénario dans le harnais
-(`calibration` par défaut, `terrain` pour M2). Inutile de l'exporter globalement.
+Il n'y a plus de **mode** à piloter : le capteur opère toujours en posture terrain
+(les modes `calibration`/`terrain` ont été retirés).
 
 ---
 
 ## 5. Étape 1 — Déployer les scripts et générer le corpus (sur le UP²)
 
-Créer les **deux** scripts dans `benchmark/` du dépôt (`generer_corpus.py`
-ci-dessous, `bench_capteur.py` en section 6), les **pousser sur le UP²**, puis
-**générer le corpus là-bas**. Le générateur écrit les pcap dans
+> ⚠️ **Source de vérité = les fichiers du dépôt** `benchmark/generer_corpus.py` et
+> `benchmark/bench_capteur.py` (versionnés). Les listings intégrés ci-dessous sont
+> une **photo de référence** et peuvent retarder d'une évolution (ex. ajout du
+> scénario mesh, retrait des modes en v3). En cas de doute, utiliser les fichiers
+> du repo, pas le copier-coller du `.md`.
+
+Les **deux** scripts existent dans `benchmark/` du dépôt, les **pousser sur le UP²**,
+puis **générer le corpus là-bas**. Le générateur écrit les pcap dans
 `/root/benchmark/corpus/` + un `manifest.json` (vérité-terrain + ordre).
 
 ```bash
@@ -578,7 +589,7 @@ def ecrire_rapport_md(cold, resultats, latences, no_llm, chemin):
             ("Surveillance / reconnaissance", ["e4", "p2", "p3"]),
             ("AP furtif / over-secured", ["e6"]),
             ("Evil twin (registre persistant)", ["e7"]),
-            ("Modes calibration/terrain", ["m1", "m2"]),
+            ("Réseau mesh / multi-AP", ["mesh"]),
             ("Faux positifs zone grise", ["b3"])]
     for nom, prefixes in caps:
         lignes = [r for r in resultats if any(r["pcap"].startswith(p) for p in prefixes)]
@@ -692,7 +703,7 @@ si besoin, un paragraphe d'analyse qualitative à la main.
    renvoyée par le LLM, identification du goulot d'étranglement (le LLM).
 5. **Verdict** — phrase de synthèse (X/N ennemis détectés, temps médian/fenêtre) +
    **tableau de capacités** (attaques dures, surveillance, AP furtif, evil twin,
-   modes calibration/terrain, faux positifs zone grise) avec ✅/❌ déduit des résultats.
+   réseau mesh / multi-AP, faux positifs zone grise) avec ✅/❌ déduit des résultats.
 
 La structure produite est la suivante (référence — c'est ce que `--rapport` écrit) :
 

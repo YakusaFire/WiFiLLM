@@ -3,7 +3,7 @@
 #  test_batterie.py — Batterie de tests fonctionnels + pièges
 # =============================================================================
 #  Rôle : Exerce TOUTES les fonctionnalités de détection (règles, traqueur,
-#         LLM, résolution OUI, modes calibration/terrain) sur des scénarios
+#         LLM, résolution OUI, détection mesh) sur des scénarios
 #         synthétiques à vérité-terrain connue, dont des PIÈGES délibérés.
 #         Vérifie si le capteur signale bien tous les appareils hostiles
 #         (rappel) et combien de faux positifs il génère.
@@ -48,9 +48,10 @@ FILAT  = "ee:88:c1:7f:33:44"   # randomisé persistant
 
 SUB = dict(probe="0x0004", deauth="0x000c", auth="0x000b", assoc="0x0000", beacon="0x0008")
 
-def decision(frames, mode="calibration", traqueur=None):
-    """Évalue un lot de frames ; retourne la liste des décisions par appareil."""
-    oui.MODE = mode
+def decision(frames, mode=None, traqueur=None):
+    """Évalue un lot de frames ; retourne la liste des décisions par appareil.
+    (Le paramètre `mode` est conservé pour compat mais ignoré : le capteur opère
+    toujours en posture terrain — les modes calibration/terrain ont été retirés.)"""
     t = traqueur if traqueur is not None else Traqueur()
     res = []
     for agr in agreger(frames, t):
@@ -64,7 +65,7 @@ def decision(frames, mode="calibration", traqueur=None):
 
 # ── Scénarios : (id, description, frames, attendu_flag, hostile?, mode, piège) ──
 SCEN = []
-def S(sid, desc, frames, attendu, hostile, mode="calibration", piege=None):
+def S(sid, desc, frames, attendu, hostile, mode=None, piege=None):
     SCEN.append(dict(id=sid, desc=desc, frames=frames, attendu=attendu,
                      hostile=hostile, mode=mode, piege=piege))
 
@@ -99,16 +100,10 @@ S("L4", "Espressif (ESP) probes wildcard — outil d'attaque potentiel",
   piege="ESP qui sonde = possible deauther bon marché ; le LLM doit le remonter.")
 S("L5", "Espressif fait un deauth (×5)", [F(ESP, SUB["deauth"], da="ff:ff:ff:ff:ff:ff") for _ in range(5)], True, True)
 
-# --- OUI + MODES ---
-S("M1", "PIÈGE FP : GL.iNet (ami) sonde 6 SSID en CALIBRATION",
-  [F(GLINET, SUB["probe"], ssid=f"AP{i}") for i in range(6)], False, False, mode="calibration",
-  piege="Matériel maison, mais la règle surveillance (≥5 SSID) ignore le mode → FP probable.")
-S("M2", "GL.iNet sonde 6 SSID en TERRAIN (hostile attendu)",
-  [F(GLINET, SUB["probe"], ssid=f"AP{i}") for i in range(6)], True, True, mode="terrain")
-S("M3", "GL.iNet probe bénin (1 SSID) en CALIBRATION → bénin",
-  [F(GLINET, SUB["probe"], ssid="Bureau") for _ in range(2)], False, False, mode="calibration")
-S("M4", "GL.iNet probe (1 SSID) en TERRAIN → suspect",
-  [F(GLINET, SUB["probe"], ssid="Bureau") for _ in range(2)], True, True, mode="terrain")
+# --- OUI (posture terrain unique — plus de mode calibration) ---
+S("M1", "GL.iNet (infra domestique) sonde 6 SSID → hostile (règle surveillance)",
+  [F(GLINET, SUB["probe"], ssid=f"AP{i}") for i in range(6)], True, True,
+  piege="Matériel d'infra domestique en zone : toujours suspect (plus de mode calibration).")
 
 def run():
     print(f"{G}{B}{'='*70}{RST}")
@@ -132,11 +127,10 @@ def run():
     print(f"\n{G}{B}{'─'*70}{RST}\n{G}  PIÈGES MULTI-FENÊTRES (traqueur){RST}\n{G}{B}{'─'*70}{RST}")
 
     # TR1 : téléphone randomisé persistant sur 4 fenêtres → escalade au LLM
-    oui.MODE = "calibration"
     t = Traqueur()
     tr1_flag = None
     for w in range(1, 5):
-        d = decision([F(FILAT, SUB["probe"], ssid="Hotel_Lobby", signal="-44")], "calibration", traqueur=t)[0]
+        d = decision([F(FILAT, SUB["probe"], ssid="Hotel_Lobby", signal="-44")], traqueur=t)[0]
         tr1_flag = d[1]; tr1_chemin = d[2]; tr1_cat = d[3]; tr1_raison = d[4]
     tr1_ok = (tr1_flag == False)
     tag = f"{V}OK{RST}" if tr1_ok else f"{R}KO{RST}"
@@ -148,7 +142,7 @@ def run():
     # E1 : evil twin — ROGUE (nouveau BSSID, signal fort) usurpe un SSID établi.
     # Le registre détecte le conflit et ESCALADE au LLM avec la comparaison ;
     # le verdict evil_twin final (qui dépend d'Ollama) est validé sur le UP².
-    oui.MODE = "calibration"
+    # NB : ROGUE a un vendor DIFFÉRENT de LEGIT → ce n'est pas un mesh (même vendor).
     LEGIT = "80:20:da:aa:aa:aa"; ROGUE = "00:de:ad:be:ef:00"
     reg = RegistreAP(chemin=os.path.join(tempfile.mkdtemp(), "reg.json"))
     for _ in range(4):                      # LEGIT établi sur 4 fenêtres (antériorité)
@@ -171,22 +165,28 @@ def run():
     if rogue_agr is not None and rogue_agr["auto_class"] is None:
         print(f"     {GR}…{rogue_agr['description'][-200:]}{RST}")
 
-    # E2 : mesh légitime — 2 AP même SSID, connus de longue date. Une fois
-    # STABILISÉS (n_fenetres > seuil), ils ne doivent PLUS ré-escalader à chaque
-    # fenêtre, sinon le LLM serait noyé sous chaque réseau multi-AP banal.
+    # E2 : MESH — 2 AP même SSID et MÊME fabricant (kit mesh / multi-AP). En
+    # posture terrain, une infra multi-AP est inhabituelle → SUSPECT, verdict
+    # DÉTERMINISTE (catégorie 'mesh', sans LLM). Nécessite l'OUI résolu (manuf) :
+    # validé sur le UP². En régime établi, les DEUX AP doivent être levés.
     reg2 = RegistreAP(chemin=os.path.join(tempfile.mkdtemp(), "reg.json"))
     AP_A, AP_B = "80:20:da:aa:aa:aa", "80:20:da:bb:bb:bb"
-    for _ in range(5):
+    for _ in range(2):
         reg2.nouvelle_fenetre()
         agreger([F(AP_A, SUB["beacon"], ssid="Entreprise", signal="-55"),
                  F(AP_B, SUB["beacon"], ssid="Entreprise", signal="-58")], Traqueur(), reg2)
     reg2.nouvelle_fenetre()
     agr_e2 = agreger([F(AP_A, SUB["beacon"], ssid="Entreprise", signal="-55"),
                       F(AP_B, SUB["beacon"], ssid="Entreprise", signal="-58")], Traqueur(), reg2)
-    e2_ok = all(a["auto_class"] is not None and not a["auto_class"]["interesting"] for a in agr_e2)
+    e2_ok = all(a["auto_class"] is not None and a["auto_class"]["interesting"]
+                and a["auto_class"]["category"] == "mesh" for a in agr_e2)
     tag = f"{V}OK{RST}" if e2_ok else f"{R}KO{RST}"
-    print(f"\n[{tag}] {G}E2{RST} {J}[mesh légitime]{RST} — 2 AP même SSID stabilisés → pas de ré-escalade")
-    print(f"     Aucune escalade en régime établi : {e2_ok}")
+    print(f"\n[{tag}] {G}E2{RST} {J}[mesh]{RST} — 2 AP même SSID MÊME fabricant → SUSPECT (catégorie mesh)")
+    print(f"     Les deux AP levés en mesh (régime établi) : {e2_ok}")
+    if not e2_ok:
+        for a in agr_e2:
+            ac = a["auto_class"]
+            print(f"     {GR}{a['mac']} → {ac and (ac['category'], ac['interesting'])}{RST}")
 
     # ── BILAN ──
     print(f"\n{G}{B}{'='*70}{RST}\n{G}{B}  BILAN — DÉTECTION DES APPAREILS HOSTILES{RST}\n{G}{B}{'='*70}{RST}")
