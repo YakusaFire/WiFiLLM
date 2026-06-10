@@ -96,11 +96,12 @@ Antenne WiFi (mode monitor)
 Script principal à utiliser sur le UP² pour démarrer ou arrêter l'ensemble.
 
 ```bash
-bash /root/capteur.sh start    # Lance capture + pipeline
-bash /root/capteur.sh stop     # Arrête tout proprement
+bash /root/capteur.sh start    # Lance capture + pipeline + arme le watchdog
+bash /root/capteur.sh stop     # Arrête tout proprement + désarme le watchdog
 bash /root/capteur.sh restart  # Redémarre
-bash /root/capteur.sh status   # État des processus + stats fichiers
+bash /root/capteur.sh status   # État des processus + stats fichiers + watchdog
 bash /root/capteur.sh logs     # 20 dernières lignes du log pipeline
+bash /root/capteur.sh watchdog # (appelé par cron) relance un composant tombé
 ```
 
 Au démarrage (`start`), le script :
@@ -114,6 +115,21 @@ Au démarrage (`start`), le script :
    le trafic réel, sinon la 1ʳᵉ inférence dépasse le timeout de 60 s → premier
    appareil ambigu raté (faux négatif silencieux). Ignoré si Ollama est injoignable.
 6. Lance `pipeline.py` en arrière-plan avec `nohup` (modèle déjà chaud)
+7. Pose le drapeau `/data/capture/.capteur_enabled` et **arme le watchdog** (cron)
+
+#### Watchdog (auto-restart)
+
+Une tâche cron exécute `capteur.sh watchdog` **chaque minute**. Si `capture.sh` ou
+`pipeline.py` est tombé alors que le capteur est **armé** (drapeau présent), elle le
+relance ; si les **deux** sont absents (ex. après reboot), elle refait un `start`
+complet (mode monitor + préchauffe). Garde-fous :
+- **Drapeau d'état** : un `stop` retire le drapeau **et** la tâche cron → le watchdog
+  ne combat jamais un arrêt volontaire (cf. ancien crash-loop).
+- **Verrou `flock`** (`/var/run/capteur.lock`) : sérialise `start`/`watchdog` — un
+  tick watchdog pendant la préchauffe (~80 s) du `start` est ignoré, donc **pas de
+  double-démarrage**. Le fd du verrou est fermé (`9>&-`) dans les processus enfants
+  pour ne pas le leur léguer à vie.
+- Log dédié : `/var/log/capteur_watchdog.log`.
 
 ---
 

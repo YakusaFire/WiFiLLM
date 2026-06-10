@@ -12,15 +12,16 @@
 
 ## 1. Robustesse opérationnelle (prioritaire — fait *tenir* le capteur sur la durée)
 
-### ⭐⭐ R1 — Watchdog + auto-restart  ·  statut : à faire
-- **Pourquoi.** Si `capture.sh` ou `pipeline.py` meurt, **rien ne le relance**
-  (un ancien crash-loop est déjà documenté en mémoire projet). Inacceptable pour un
-  capteur déposé en zone sans opérateur.
-- **Comment.** Service **systemd** (`Restart=always`, `WatchdogSec`) pour la capture
-  et la pipeline, OU un cron-watchdog (`* * * * *`) qui `pgrep` les deux et relance
-  `capteur.sh start` si absent. Logguer chaque redémarrage. Vérifier qu'on ne crée
-  pas de double-démarrage (cf. mémoire `project_capteur_double_demarrage`).
-- **Effort.** Faible.
+### ✅ R1 — Watchdog + auto-restart  ·  statut : FAIT (2026-06-10)
+- **Implémenté** dans `scripts/capteur.sh` : cron `* * * * * capteur.sh watchdog`
+  posé par `start`, retiré par `stop`. Le watchdog relance `pipeline.py` et/ou
+  `capture.sh` s'ils sont tombés (et fait un `start` complet si les deux sont à
+  l'arrêt, ex. reboot). Garde-fous : **drapeau d'état** `/data/capture/.capteur_enabled`
+  (un `stop` désarme → jamais combattu) + **verrou `flock`** (`/var/run/capteur.lock`,
+  fd fermé `9>&-` dans les enfants) → **pas de double-démarrage** pendant la préchauffe.
+- **Testé sur le UP²** : relance auto par tick cron réel (<65 s), verrou OK pendant
+  préchauffe, `stop` désarme proprement. 2 bugs attrapés au test (race double-start,
+  flock+fork) et corrigés. Log : `/var/log/capteur_watchdog.log`.
 
 ### ⭐⭐ R2 — Rétention / rotation de `/data/capture/done/`  ·  statut : à faire
 - **Pourquoi.** `capteur.sh status` montre **~4400 pcaps** accumulés dans `done/`. À
@@ -120,6 +121,7 @@
 
 ## Fait récemment (pour mémoire)
 
+- ✅ **R1 Watchdog + auto-restart** (cron + drapeau + verrou flock) — testé UP².
 - ✅ Détection **mesh** (catégorie déterministe `mesh`) — commit a9137cb.
 - ✅ Suppression des **modes** calibration/terrain (posture terrain unique) — a9137cb.
 - ✅ **Cold-start LLM** maîtrisé (préchauffage `capteur.sh start` + keep_alive) — 7bed4a5.
